@@ -17,6 +17,7 @@ type Client struct {
 	apiKey       string
 	model        string
 	defaultModel string
+	smallModel   string
 	client       *http.Client
 }
 
@@ -37,11 +38,14 @@ func NewClient() *Client {
 		model = "gpt-4o"
 	}
 
+	smallModel := os.Getenv("KELE_SMALL_MODEL")
+
 	return &Client{
 		apiBase:      apiBase,
 		apiKey:       apiKey,
 		model:        model,
 		defaultModel: model,
+		smallModel:   smallModel,
 		client:       &http.Client{},
 	}
 }
@@ -66,7 +70,68 @@ func (c *Client) ResetModel() {
 	c.model = c.defaultModel
 }
 
-// Chat 发送聊天请求
+// GetSmallModel 获取小模型名称（回落到主模型）
+func (c *Client) GetSmallModel() string {
+	if c.smallModel != "" {
+		return c.smallModel
+	}
+	return c.model
+}
+
+// SetSmallModel 设置小模型
+func (c *Client) SetSmallModel(model string) {
+	c.smallModel = model
+}
+
+// Complete 非流式快速补全（使用小模型）
+func (c *Client) Complete(messages []Message, maxTokens int) (string, error) {
+	useModel := c.GetSmallModel()
+
+	req := ChatRequest{
+		Model:       useModel,
+		Messages:    messages,
+		Stream:      false,
+		Temperature: 0.3,
+		MaxTokens:   maxTokens,
+	}
+
+	body, err := json.Marshal(req)
+	if err != nil {
+		return "", err
+	}
+
+	httpReq, err := http.NewRequest("POST", c.apiBase+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API error: %s - %s", resp.Status, string(bodyBytes))
+	}
+
+	var chatResp ChatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+		return "", err
+	}
+
+	if len(chatResp.Choices) == 0 {
+		return "", nil
+	}
+
+	return strings.TrimSpace(chatResp.Choices[0].Message.Content), nil
+}
+
+// Chat 发送聊天请求（非流式）
 func (c *Client) Chat(messages []Message, tools []Tool) (*ChatResponse, error) {
 	req := ChatRequest{
 		Model:       c.model,
@@ -109,14 +174,12 @@ func (c *Client) Chat(messages []Message, tools []Tool) (*ChatResponse, error) {
 	return &chatResp, nil
 }
 
-// ChatStream 流式聊天
-func (c *Client) ChatStream(messages []Message, tools []Tool) (<-chan string, <-chan error) {
-	contentChan := make(chan string, 100)
-	errChan := make(chan error, 1)
+// ChatStream 流式聊天（支持工具调用累积）
+func (c *Client) ChatStream(messages []Message, tools []Tool) <-chan StreamEvent {
+	eventChan := make(chan StreamEvent, 100)
 
 	go func() {
-		defer close(contentChan)
-		defer close(errChan)
+		defer close(eventChan)
 
 		req := ChatRequest{
 			Model:       c.model,
@@ -129,13 +192,13 @@ func (c *Client) ChatStream(messages []Message, tools []Tool) (<-chan string, <-
 
 		body, err := json.Marshal(req)
 		if err != nil {
-			errChan <- err
+			eventChan <- StreamEvent{Type: "error", Error: err}
 			return
 		}
 
 		httpReq, err := http.NewRequest("POST", c.apiBase+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
-			errChan <- err
+			eventChan <- StreamEvent{Type: "error", Error: err}
 			return
 		}
 
@@ -144,30 +207,55 @@ func (c *Client) ChatStream(messages []Message, tools []Tool) (<-chan string, <-
 
 		resp, err := c.client.Do(httpReq)
 		if err != nil {
-			errChan <- err
+			eventChan <- StreamEvent{Type: "error", Error: err}
 			return
 		}
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			bodyBytes, _ := io.ReadAll(resp.Body)
-			errChan <- fmt.Errorf("API error: %s - %s", resp.Status, string(bodyBytes))
+			eventChan <- StreamEvent{Type: "error", Error: fmt.Errorf("API error: %s - %s", resp.Status, string(bodyBytes))}
 			return
 		}
+
+		// 工具调用累积器
+		var toolCalls []ToolCall
+		toolCallArgs := make(map[int]*strings.Builder)
+		terminated := false
 
 		reader := bufio.NewReader(resp.Body)
 		for {
 			line, err := reader.ReadString('\n')
 			if err != nil {
 				if err != io.EOF {
-					errChan <- err
+					eventChan <- StreamEvent{Type: "error", Error: err}
+				} else if !terminated {
+					// EOF 兜底
+					if len(toolCalls) > 0 {
+						c.finalizeToolCalls(toolCalls, toolCallArgs)
+						eventChan <- StreamEvent{Type: "tool_calls", ToolCalls: toolCalls}
+					} else {
+						eventChan <- StreamEvent{Type: "done"}
+					}
 				}
 				return
 			}
 
 			line = strings.TrimSpace(line)
-			if line == "" || line == "data: [DONE]" {
+			if line == "" {
 				continue
+			}
+
+			if line == "data: [DONE]" {
+				if !terminated {
+					if len(toolCalls) > 0 {
+						c.finalizeToolCalls(toolCalls, toolCallArgs)
+						eventChan <- StreamEvent{Type: "tool_calls", ToolCalls: toolCalls}
+					} else {
+						eventChan <- StreamEvent{Type: "done"}
+					}
+				}
+				return
 			}
 
 			if !strings.HasPrefix(line, "data: ") {
@@ -180,14 +268,59 @@ func (c *Client) ChatStream(messages []Message, tools []Tool) (<-chan string, <-
 				continue
 			}
 
-			if len(chunk.Choices) > 0 {
-				content := chunk.Choices[0].Delta.Content
-				if content != "" {
-					contentChan <- content
+			if len(chunk.Choices) == 0 {
+				continue
+			}
+
+			delta := chunk.Choices[0].Delta
+
+			// 文本内容
+			if delta.Content != "" {
+				eventChan <- StreamEvent{Type: "content", Content: delta.Content}
+			}
+
+			// 工具调用（流式累积）
+			for _, tc := range delta.ToolCalls {
+				idx := tc.Index
+				for len(toolCalls) <= idx {
+					toolCalls = append(toolCalls, ToolCall{})
 				}
+				if tc.ID != "" {
+					toolCalls[idx].ID = tc.ID
+					toolCalls[idx].Type = tc.Type
+					toolCalls[idx].Function.Name = tc.Function.Name
+				}
+				if tc.Function.Arguments != "" {
+					if _, ok := toolCallArgs[idx]; !ok {
+						toolCallArgs[idx] = &strings.Builder{}
+					}
+					toolCallArgs[idx].WriteString(tc.Function.Arguments)
+				}
+			}
+
+			// 检查结束原因
+			if chunk.Choices[0].FinishReason != nil {
+				reason := *chunk.Choices[0].FinishReason
+				terminated = true
+				if reason == "tool_calls" {
+					c.finalizeToolCalls(toolCalls, toolCallArgs)
+					eventChan <- StreamEvent{Type: "tool_calls", ToolCalls: toolCalls}
+				} else {
+					eventChan <- StreamEvent{Type: "done"}
+				}
+				return
 			}
 		}
 	}()
 
-	return contentChan, errChan
+	return eventChan
+}
+
+// finalizeToolCalls 将累积的参数写入 ToolCall
+func (c *Client) finalizeToolCalls(toolCalls []ToolCall, args map[int]*strings.Builder) {
+	for idx, builder := range args {
+		if idx < len(toolCalls) {
+			toolCalls[idx].Function.Arguments = builder.String()
+		}
+	}
 }

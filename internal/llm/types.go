@@ -2,14 +2,16 @@ package llm
 
 // Message 表示对话消息
 type Message struct {
-	Role    string `json:"role"`    // system, user, assistant
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
 }
 
 // Tool 工具定义
 type Tool struct {
-	Type     string         `json:"type"`
-	Function ToolFunction   `json:"function"`
+	Type     string       `json:"type"`
+	Function ToolFunction `json:"function"`
 }
 
 // ToolFunction 工具函数定义
@@ -21,12 +23,21 @@ type ToolFunction struct {
 
 // ToolCall 工具调用
 type ToolCall struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
+	Index    int    `json:"index,omitempty"`
+	ID       string `json:"id,omitempty"`
+	Type     string `json:"type,omitempty"`
 	Function struct {
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
 	} `json:"function"`
+}
+
+// StreamEvent LLM 层流式事件
+type StreamEvent struct {
+	Type      string     // content, tool_calls, done, error
+	Content   string
+	ToolCalls []ToolCall
+	Error     error
 }
 
 // ChatRequest 聊天请求
@@ -46,10 +57,9 @@ type ChatResponse struct {
 	Created int64  `json:"created"`
 	Model   string `json:"model"`
 	Choices []struct {
-		Index        int       `json:"index"`
-		Message      Message   `json:"message"`
-		ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
-		FinishReason string    `json:"finish_reason"`
+		Index        int     `json:"index"`
+		Message      Message `json:"message"`
+		FinishReason string  `json:"finish_reason"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`

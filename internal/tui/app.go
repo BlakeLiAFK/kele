@@ -3,7 +3,6 @@ package tui
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -12,261 +11,224 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/BlakeLiAFK/kele/internal/agent"
+	"github.com/BlakeLiAFK/kele/internal/llm"
 )
+
+// 最大会话数
+const maxSessions = 9
 
 // allCommands 所有可用命令
 var allCommands = []string{
-	"/help",
-	"/clear",
-	"/reset",
-	"/exit",
-	"/quit",
-	"/model",
-	"/models",
-	"/model-reset",
-	"/remember",
-	"/search",
-	"/memory",
-	"/status",
-	"/config",
-	"/history",
-	"/tokens",
-	"/save",
-	"/export",
-	"/debug",
+	"/help", "/clear", "/reset", "/exit", "/quit",
+	"/model", "/models", "/model-reset", "/model-small",
+	"/remember", "/search", "/memory",
+	"/status", "/config", "/history", "/tokens",
+	"/save", "/export", "/debug",
+	"/new", "/sessions", "/switch", "/rename",
 }
 
-// Message 表示一条消息
+// Message 消息
 type Message struct {
 	Role     string
 	Content  string
 	IsStream bool
 }
 
-// App 是主应用模型
+// App 主应用
 type App struct {
-	viewport      viewport.Model
-	textarea      textarea.Model
-	messages      []Message
-	width         int
-	height        int
-	ready         bool
+	// 多会话
+	sessions  []*Session
+	activeIdx int
+
+	// UI 组件
+	viewport viewport.Model
+	textarea textarea.Model
+	width    int
+	height   int
+	ready    bool
+	quitting bool
+
+	// 补全
+	completion     *CompletionEngine
+	completionHint string
+	suggestion     string
+	aiPending      bool
+
+	// 状态
 	statusContent string
-	brain         *agent.Brain
-	streaming     bool
-	streamBuffer  string
-	eventChan     <-chan agent.StreamEvent
-	tokenCount    int
-	cost          float64
+	overlayMode   string // "" | "settings"
+
+	// 双击检测
+	lastCtrlC time.Time
+	lastEsc   time.Time
 }
 
-// NewApp 创建新的应用实例
+// streamMsg 流式消息
+type streamMsg struct {
+	content   string
+	done      bool
+	err       error
+	toolName  string // 工具调用名
+	toolResult string // 工具执行结果
+}
+
+// streamInitMsg 流式初始化
+type streamInitMsg struct {
+	eventChan <-chan streamEvent
+}
+
+// streamEvent 内部流式事件
+type streamEvent struct {
+	Type       string // content, tool_call, tool_result, error, done
+	Content    string
+	ToolName   string
+	ToolResult string
+	Error      string
+}
+
+// NewApp 创建应用
 func NewApp() *App {
 	ta := textarea.New()
-	ta.Placeholder = "输入消息... (Enter 发送, Tab 补全, ESC 中断)"
+	ta.Placeholder = "输入消息... (Tab 补全, Ctrl+J 换行)"
 	ta.Focus()
 	ta.CharLimit = 5000
 	ta.SetHeight(3)
 	ta.ShowLineNumbers = false
 
-	return &App{
-		textarea:      ta,
-		messages:      []Message{},
-		statusContent: "🥤 Kele v0.1.2 | 正在初始化...",
-		brain:         agent.NewBrain(),
-		streaming:     false,
+	// 创建第一个会话
+	firstSession := NewSession(1)
+
+	app := &App{
+		sessions:  []*Session{firstSession},
+		activeIdx: 0,
+		textarea:  ta,
+		completion: NewCompletionEngine(firstSession.brain),
 	}
+	app.updateStatus("Ready")
+	return app
 }
 
-// streamMsg 流式消息
-type streamMsg struct {
-	content string
-	done    bool
-	err     error
+// currentSession 获取当前活跃会话
+func (a *App) currentSession() *Session {
+	return a.sessions[a.activeIdx]
 }
 
-// streamInitMsg 流式初始化消息
-type streamInitMsg struct {
-	eventChan <-chan agent.StreamEvent
-}
-
-// Init 初始化应用
+// Init 初始化
 func (a *App) Init() tea.Cmd {
-	a.statusContent = "🥤 Kele v0.1.2 | 准备就绪 | 输入消息开始对话"
 	return textarea.Blink
 }
 
 // Update 处理消息
 func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	// 先拦截关键按键，不让 textarea 消费
+	// 按键事件先由 keys.go 处理
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
-		switch keyMsg.Type {
-		case tea.KeyCtrlC:
-			return a, tea.Quit
-
-		case tea.KeyEsc:
-			if a.streaming {
-				a.streaming = false
-				a.eventChan = nil
-				a.streamBuffer = ""
-				if len(a.messages) > 0 && a.messages[len(a.messages)-1].IsStream {
-					a.messages[len(a.messages)-1].Content = a.streamBuffer + "\n\n⚠️ [已中断]"
-					a.messages[len(a.messages)-1].IsStream = false
-				}
-				a.viewport.SetContent(a.renderMessages())
-				a.viewport.GotoBottom()
-				a.updateStatus("任务已中断")
-				return a, nil
-			}
-			a.updateStatus("💡 使用 /exit 或 Ctrl+C 退出程序")
-			return a, nil
-
-		case tea.KeyTab:
-			// Tab 补全 - 在传给 textarea 之前拦截
-			if a.streaming {
-				return a, nil
-			}
-			currentInput := a.textarea.Value()
-			completed := a.handleTabComplete(currentInput)
-			if completed != currentInput {
-				a.textarea.SetValue(completed)
-				a.textarea.CursorEnd()
-			}
-			return a, nil
-
-		case tea.KeyEnter:
-			return a, a.handleEnter()
+		consumed, cmd := a.handleKeyMsg(keyMsg)
+		if consumed {
+			return a, cmd
 		}
 	}
 
-	// 非拦截的按键和其他消息，正常传给子组件
-	var (
-		tiCmd tea.Cmd
-		vpCmd tea.Cmd
-	)
+	// 传递给子组件
+	var tiCmd, vpCmd tea.Cmd
+	prevInput := a.textarea.Value()
 	a.textarea, tiCmd = a.textarea.Update(msg)
 	a.viewport, vpCmd = a.viewport.Update(msg)
 
+	// 处理其他消息
 	switch msg := msg.(type) {
 	case streamInitMsg:
-		a.eventChan = msg.eventChan
-		return a, continueStream(a.eventChan)
+		sess := a.currentSession()
+		sess.eventChan = msg.eventChan
+		return a, a.continueStream()
 
 	case streamMsg:
-		if msg.err != nil {
-			a.streaming = false
-			a.eventChan = nil
-			a.addMessage("assistant", "错误: "+msg.err.Error())
-			return a, nil
-		}
+		return a, a.handleStreamMsg(msg)
 
-		if msg.done {
-			a.eventChan = nil
-			a.streaming = false
-			if a.streamBuffer != "" {
-				a.messages[len(a.messages)-1].Content = a.streamBuffer
-				a.messages[len(a.messages)-1].IsStream = false
-				a.streamBuffer = ""
-			}
-			a.updateStatus("准备就绪")
-			return a, nil
-		}
-
-		a.streamBuffer += msg.content
-		if len(a.messages) > 0 && a.messages[len(a.messages)-1].IsStream {
-			a.messages[len(a.messages)-1].Content = a.streamBuffer
-		}
-		a.viewport.SetContent(a.renderMessages())
-		a.viewport.GotoBottom()
-		return a, continueStream(a.eventChan)
+	case completionMsg:
+		return a, a.handleCompletionMsg(msg)
 
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
-
+		vpHeight := msg.Height - 7
+		if vpHeight < 3 {
+			vpHeight = 3
+		}
 		if !a.ready {
-			a.viewport = viewport.New(msg.Width, msg.Height-6)
-			a.viewport.YPosition = 2
+			a.viewport = viewport.New(msg.Width, vpHeight)
+			a.viewport.YPosition = 1
 			a.ready = true
 		} else {
 			a.viewport.Width = msg.Width
-			a.viewport.Height = msg.Height - 6
+			a.viewport.Height = vpHeight
 		}
-
 		a.textarea.SetWidth(msg.Width - 4)
-		a.viewport.SetContent(a.renderMessages())
+		a.refreshViewport()
 	}
 
-	// 实时补全提示：检测当前输入并更新状态栏
-	if !a.streaming {
-		a.showInlineHint()
+	// 输入变化时触发补全
+	curInput := a.textarea.Value()
+	if curInput != prevInput && !a.currentSession().streaming {
+		completionCmd := a.onInputChanged(curInput)
+		return a, tea.Batch(tiCmd, vpCmd, completionCmd)
 	}
 
 	return a, tea.Batch(tiCmd, vpCmd)
 }
 
-// showInlineHint 实时补全提示
-func (a *App) showInlineHint() {
-	input := a.textarea.Value()
-	if input == "" {
-		return
+// View 渲染
+func (a *App) View() string {
+	if !a.ready {
+		return "\n  Initializing..."
 	}
 
-	// 斜杠命令提示
-	if strings.HasPrefix(input, "/") {
-		parts := strings.Fields(input)
-		if len(parts) == 1 {
-			prefix := strings.ToLower(parts[0])
-			var matches []string
-			for _, cmd := range allCommands {
-				if strings.HasPrefix(strings.ToLower(cmd), prefix) && cmd != prefix {
-					matches = append(matches, cmd)
-				}
-			}
-			if len(matches) > 0 {
-				hint := "💡 " + strings.Join(matches, "  ")
-				a.updateStatus(hint)
-			}
-		}
-		return
+	// Ctrl+O 叠加层
+	if a.overlayMode == "settings" {
+		return renderOverlay(a, a.width, a.height)
 	}
 
-	// @ 引用提示
-	lastAt := strings.LastIndex(input, "@")
-	if lastAt >= 0 {
-		partial := input[lastAt+1:]
-		if partial == "" {
-			a.updateStatus("💡 输入文件路径，Tab 补全 (例: @main.go @src/ @*.go)")
-			return
-		}
-		_, candidates := completeFilePath(partial)
-		if len(candidates) > 0 && len(candidates) <= 8 {
-			var display []string
-			for _, c := range candidates {
-				display = append(display, "@"+c)
-			}
-			a.updateStatus("💡 " + strings.Join(display, "  "))
-		} else if len(candidates) > 8 {
-			a.updateStatus(fmt.Sprintf("💡 %d 个匹配，继续输入缩小范围...", len(candidates)))
-		}
-	}
+	// Tab 栏
+	tabBar := renderTabBar(a.sessions, a.activeIdx, a.width)
+
+	// 对话区
+	chatArea := a.viewport.View()
+
+	// 分隔线
+	separator := separatorStyle.Width(a.width).Render(strings.Repeat("-", a.width))
+
+	// 补全提示行
+	hintLine := renderCompletionHintLine(a.completionHint, a.width)
+
+	// 输入区
+	inputArea := lipgloss.NewStyle().
+		Width(a.width - 2).
+		Padding(0, 1).
+		Render(a.textarea.View())
+
+	// 帮助行
+	helpText := a.renderHelpLine()
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
+		tabBar,
+		chatArea,
+		separator,
+		hintLine,
+		inputArea,
+		helpText,
+	)
 }
 
-// handleTabComplete 统一处理 Tab 补全
-func (a *App) handleTabComplete(input string) string {
-	if strings.HasPrefix(input, "/") {
-		return a.completeCommand(input)
-	}
-	if strings.Contains(input, "@") {
-		return a.completeAtReference(input)
-	}
-	return input
+// renderHelpLine 渲染底部帮助行
+func (a *App) renderHelpLine() string {
+	return helpStyle.Width(a.width).Render(
+		"Tab 补全 | Enter 发送 | Ctrl+J 换行 | Ctrl+O 设置 | Ctrl+C x2 退出")
 }
 
 // handleEnter 处理 Enter 发送
 func (a *App) handleEnter() tea.Cmd {
-	if a.streaming {
+	sess := a.currentSession()
+	if sess.streaming {
 		return nil
 	}
 
@@ -275,10 +237,22 @@ func (a *App) handleEnter() tea.Cmd {
 		return nil
 	}
 
+	// 清除补全状态
+	a.completionHint = ""
+	a.suggestion = ""
+	a.completion.ClearCache()
+
+	// 保存到输入历史
+	sess.PushHistory(userInput)
+	sess.ResetHistoryNav()
+
 	// 斜杠命令
 	if strings.HasPrefix(userInput, "/") {
 		a.handleCommand(userInput)
 		a.textarea.Reset()
+		if a.quitting {
+			return tea.Quit
+		}
 		return nil
 	}
 
@@ -287,535 +261,283 @@ func (a *App) handleEnter() tea.Cmd {
 	llmInput := userInput
 	if len(refs) > 0 {
 		llmInput = buildContextMessage(cleanText, refs)
-		summary := formatRefSummary(refs)
-		a.updateStatus(summary)
+		a.updateStatus(formatRefSummary(refs))
 	}
 
-	// 添加用户消息（显示原始输入）
-	a.addMessage("user", userInput)
+	// 添加用户消息
+	sess.AddMessage("user", userInput)
 	a.textarea.Reset()
 
-	// 添加流式占位符
-	a.addMessage("assistant", "")
-	a.messages[len(a.messages)-1].IsStream = true
-	a.streaming = true
-	a.streamBuffer = ""
+	// 流式占位
+	sess.AddMessage("assistant", "")
+	sess.messages[len(sess.messages)-1].IsStream = true
+	sess.streaming = true
+	sess.streamBuffer = ""
 	if len(refs) == 0 {
-		a.updateStatus("AI 思考中...")
+		a.updateStatus("thinking...")
 	}
 
-	return startStream(a.brain, llmInput)
+	a.refreshViewport()
+
+	return a.startStream(llmInput)
 }
 
 // startStream 开始流式响应
-func startStream(brain *agent.Brain, userInput string) tea.Cmd {
+func (a *App) startStream(userInput string) tea.Cmd {
+	sess := a.currentSession()
 	return func() tea.Msg {
-		eventChan, err := brain.ChatStream(userInput)
+		eventChan, err := sess.brain.ChatStream(userInput)
 		if err != nil {
 			return streamMsg{err: err}
 		}
-		return streamInitMsg{eventChan: eventChan}
+		// 适配 agent.StreamEvent → streamEvent
+		internalChan := make(chan streamEvent, 100)
+		go func() {
+			defer close(internalChan)
+			for ev := range eventChan {
+				switch ev.Type {
+				case "content":
+					internalChan <- streamEvent{Type: "content", Content: ev.Content}
+				case "tool_start":
+					name := ""
+					if ev.Tool != nil {
+						name = ev.Tool.Name
+					}
+					internalChan <- streamEvent{Type: "tool_call", ToolName: name}
+				case "tool_result":
+					name, result := "", ""
+					if ev.Tool != nil {
+						name = ev.Tool.Name
+						result = ev.Tool.Result
+					}
+					internalChan <- streamEvent{Type: "tool_result", ToolName: name, ToolResult: result}
+				case "error":
+					internalChan <- streamEvent{Type: "error", Error: ev.Error}
+				case "done":
+					internalChan <- streamEvent{Type: "done"}
+				}
+			}
+		}()
+		return streamInitMsg{eventChan: internalChan}
 	}
 }
 
-// continueStream 继续接收流式内容
-func continueStream(eventChan <-chan agent.StreamEvent) tea.Cmd {
+// continueStream 继续接收流
+func (a *App) continueStream() tea.Cmd {
+	sess := a.currentSession()
+	ch := sess.eventChan
 	return func() tea.Msg {
-		if eventChan == nil {
+		if ch == nil {
 			return streamMsg{done: true}
 		}
-
-		event, ok := <-eventChan
+		event, ok := <-ch
 		if !ok {
 			return streamMsg{done: true}
 		}
-
-		if event.Type == "content" {
+		switch event.Type {
+		case "content":
 			return streamMsg{content: event.Content}
-		}
-		if event.Type == "error" {
+		case "tool_call":
+			return streamMsg{toolName: event.ToolName}
+		case "tool_result":
+			return streamMsg{toolName: event.ToolName, toolResult: event.ToolResult}
+		case "error":
 			return streamMsg{err: errors.New(event.Error)}
+		default:
+			return streamMsg{done: true}
 		}
-
-		return streamMsg{done: true}
 	}
 }
 
-// View 渲染视图
-func (a *App) View() string {
-	if !a.ready {
-		return "\n  初始化中..."
+// handleStreamMsg 处理流式消息
+func (a *App) handleStreamMsg(msg streamMsg) tea.Cmd {
+	sess := a.currentSession()
+
+	if msg.err != nil {
+		sess.streaming = false
+		sess.taskRunning = false
+		sess.eventChan = nil
+		sess.AddMessage("assistant", "Error: "+msg.err.Error())
+		a.refreshViewport()
+		return nil
 	}
 
-	statusBar := statusStyle.Width(a.width).Render(a.statusContent)
-	chatArea := a.viewport.View()
-	separator := lipgloss.NewStyle().
-		Width(a.width).
-		Foreground(lipgloss.Color("240")).
-		Render(strings.Repeat("─", a.width))
+	// 工具调用事件
+	if msg.toolName != "" && msg.toolResult == "" {
+		sess.taskRunning = true
+		// 如果有空的流式占位，先定形
+		lastIdx := len(sess.messages) - 1
+		if lastIdx >= 0 && sess.messages[lastIdx].IsStream {
+			if sess.messages[lastIdx].Content == "" {
+				sess.messages = sess.messages[:lastIdx]
+			} else {
+				sess.messages[lastIdx].IsStream = false
+			}
+		}
+		sess.AddMessage("assistant", fmt.Sprintf("tool: %s", msg.toolName))
+		a.updateStatus(fmt.Sprintf("executing %s...", msg.toolName))
+		a.refreshViewport()
+		return a.continueStream()
+	}
+	if msg.toolResult != "" {
+		sess.AddMessage("assistant", fmt.Sprintf("tool: %s -> %s", msg.toolName, truncateStr(msg.toolResult, 200)))
+		a.refreshViewport()
+		return a.continueStream()
+	}
 
-	inputArea := lipgloss.NewStyle().
-		Width(a.width-2).
-		Padding(0, 1).
-		Render(a.textarea.View())
+	if msg.done {
+		sess.eventChan = nil
+		sess.streaming = false
+		sess.taskRunning = false
+		// 定形所有流式消息
+		for i := range sess.messages {
+			if sess.messages[i].IsStream {
+				sess.messages[i].IsStream = false
+			}
+		}
+		sess.streamBuffer = ""
+		a.updateStatus("Ready")
+		a.refreshViewport()
+		return nil
+	}
 
-	helpText := helpStyle.Width(a.width).Render("💡 /help 查看命令 | ESC 中断任务 | Ctrl+C 退出")
-
-	return lipgloss.JoinVertical(
-		lipgloss.Left,
-		statusBar,
-		chatArea,
-		separator,
-		inputArea,
-		helpText,
-	)
+	// 普通内容
+	lastIdx := len(sess.messages) - 1
+	if lastIdx >= 0 && sess.messages[lastIdx].IsStream {
+		// 已有流式消息，追加内容
+		sess.streamBuffer += msg.content
+		sess.messages[lastIdx].Content = sess.streamBuffer
+	} else {
+		// 工具执行后的新内容块，创建新流式消息
+		sess.streamBuffer = msg.content
+		sess.AddMessage("assistant", msg.content)
+		sess.messages[len(sess.messages)-1].IsStream = true
+	}
+	a.refreshViewport()
+	return a.continueStream()
 }
 
-// addMessage 添加消息
-func (a *App) addMessage(role, content string) {
-	a.messages = append(a.messages, Message{
-		Role:    role,
-		Content: content,
-	})
-	a.viewport.SetContent(a.renderMessages())
+// onInputChanged 输入变化时触发补全
+func (a *App) onInputChanged(input string) tea.Cmd {
+	a.completionHint = ""
+	a.suggestion = ""
+	a.currentSession().ResetHistoryNav()
+
+	if input == "" {
+		return nil
+	}
+
+	// 本地补全
+	suggestions, candidates := a.completion.LocalComplete(input)
+	if len(suggestions) > 0 {
+		a.suggestion = suggestions[0]
+	}
+	if len(candidates) > 0 {
+		display := candidates
+		if len(display) > 8 {
+			display = display[:8]
+			display = append(display, fmt.Sprintf("... +%d", len(candidates)-8))
+		}
+		a.completionHint = strings.Join(display, "  ")
+	}
+
+	// AI 补全
+	if len(suggestions) == 0 && len(candidates) == 0 {
+		sess := a.currentSession()
+		history := sess.brain.GetHistory()
+		var recent []llm.Message
+		if len(history) > 4 {
+			recent = history[len(history)-4:]
+		} else {
+			recent = history
+		}
+		aiCmd := a.completion.AIComplete(input, recent)
+		if aiCmd != nil {
+			a.aiPending = true
+			return aiCmd
+		}
+	}
+
+	return nil
+}
+
+// handleCompletionMsg 处理 AI 补全结果
+func (a *App) handleCompletionMsg(msg completionMsg) tea.Cmd {
+	a.aiPending = false
+	curInput := a.textarea.Value()
+	if curInput != msg.input {
+		return nil
+	}
+	if msg.suggestion != "" {
+		a.suggestion = msg.suggestion
+		if strings.HasPrefix(msg.suggestion, curInput) {
+			hint := msg.suggestion[len(curInput):]
+			if hint != "" {
+				a.completionHint = curInput + "[" + hint + "]"
+			}
+		} else {
+			a.completionHint = msg.suggestion
+		}
+	}
+	return nil
+}
+
+// -- 会话管理 --
+
+// createSession 创建新会话
+func (a *App) createSession(name string) {
+	if len(a.sessions) >= maxSessions {
+		a.currentSession().AddMessage("assistant", fmt.Sprintf("已达最大会话数 %d", maxSessions))
+		a.refreshViewport()
+		return
+	}
+	id := len(a.sessions) + 1
+	s := NewSession(id)
+	if name != "" {
+		s.name = name
+	}
+	a.sessions = append(a.sessions, s)
+	a.switchSession(len(a.sessions) - 1)
+	a.updateStatus(fmt.Sprintf("新建会话: %s", s.name))
+}
+
+// switchSession 切换会话
+func (a *App) switchSession(idx int) {
+	if idx < 0 || idx >= len(a.sessions) {
+		return
+	}
+	a.activeIdx = idx
+	sess := a.currentSession()
+	a.completion = NewCompletionEngine(sess.brain)
+	a.completionHint = ""
+	a.suggestion = ""
+	a.updateStatus("Ready")
+	a.refreshViewport()
+}
+
+// closeSession 关闭当前会话
+func (a *App) closeSession() {
+	if len(a.sessions) <= 1 {
+		a.currentSession().AddMessage("assistant", "无法关闭最后一个会话")
+		a.refreshViewport()
+		return
+	}
+	a.sessions = append(a.sessions[:a.activeIdx], a.sessions[a.activeIdx+1:]...)
+	if a.activeIdx >= len(a.sessions) {
+		a.activeIdx = len(a.sessions) - 1
+	}
+	a.switchSession(a.activeIdx)
+}
+
+// refreshViewport 刷新对话区
+func (a *App) refreshViewport() {
+	sess := a.currentSession()
+	a.viewport.SetContent(renderMessages(sess.messages, a.width))
 	a.viewport.GotoBottom()
 }
 
 // updateStatus 更新状态栏
 func (a *App) updateStatus(status string) {
-	a.statusContent = fmt.Sprintf("🥤 Kele v0.1.2 | %s", status)
-}
-
-// renderMessages 渲染所有消息
-func (a *App) renderMessages() string {
-	var b strings.Builder
-
-	for _, msg := range a.messages {
-		if msg.Role == "user" {
-			b.WriteString(userMessageStyle.Render(fmt.Sprintf("You: %s", msg.Content)))
-		} else {
-			// 检查是否包含工具调用
-			if strings.Contains(msg.Content, "🔧") {
-				b.WriteString(toolMessageStyle.Render(msg.Content))
-			} else {
-				content := msg.Content
-				if msg.IsStream {
-					content += "▋" // 光标效果
-				}
-				b.WriteString(assistantMessageStyle.Render(fmt.Sprintf("Assistant: %s", content)))
-			}
-		}
-		b.WriteString("\n\n")
-	}
-
-	return b.String()
-}
-
-// handleCommand 处理命令
-func (a *App) handleCommand(cmd string) {
-	parts := strings.Fields(cmd)
-	if len(parts) == 0 {
-		return
-	}
-
-	command := parts[0]
-	args := parts[1:]
-
-	switch command {
-	case "/help":
-		a.addMessage("assistant", `📚 Kele 命令帮助
-
-⌨️  快捷键
-  Tab              命令 / 文件路径自动补全
-  ESC              中断当前任务
-  Ctrl+C           退出程序
-  Enter            发送消息
-
-📎 @ 引用（在消息中引用文件）
-  @file.go         引用单个文件
-  @src/            引用目录结构
-  @*.go            引用匹配的文件（glob）
-  示例: 分析 @main.go 的代码
-  示例: @src/ 这个目录的结构
-
-🗣️  对话控制
-  /clear, /reset   清空对话历史
-  /exit, /quit     退出程序
-
-🤖 模型管理
-  /model <name>     切换模型 (如: /model claude-3-5-sonnet)
-  /models           列出常用模型
-  /model-reset      重置为默认模型
-
-💾 记忆系统
-  /remember <text>  添加到长期记忆
-  /search <query>   搜索记忆
-  /memory           查看记忆摘要
-
-📊 信息查看
-  /status           显示系统状态
-  /config           显示当前配置
-  /history          显示完整对话历史
-  /tokens           显示 token 使用情况
-
-💾 会话管理
-  /save             保存当前会话
-  /export           导出对话为 Markdown
-
-🔧 其他
-  /debug            显示调试信息
-  /help             显示此帮助
-
-💡 提示：直接输入消息即可开始对话`)
-
-	case "/clear", "/reset":
-		a.messages = []Message{}
-		a.brain.ClearHistory()
-		a.viewport.SetContent("")
-		a.updateStatus("对话已清空")
-
-	case "/model":
-		if len(args) == 0 {
-			currentModel := a.brain.GetModel()
-			defaultModel := a.brain.GetDefaultModel()
-			a.addMessage("assistant", fmt.Sprintf(`🤖 当前模型: %s
-📌 默认模型: %s
-
-使用 /model <name> 切换模型
-使用 /models 查看常用模型`, currentModel, defaultModel))
-		} else {
-			modelName := strings.Join(args, " ")
-			a.brain.SetModel(modelName)
-			a.addMessage("assistant", fmt.Sprintf("✅ 已切换到模型: %s", modelName))
-			a.updateStatus(fmt.Sprintf("模型: %s", modelName))
-		}
-
-	case "/models":
-		a.addMessage("assistant", `🤖 常用模型列表
-
-OpenAI 系列:
-  • gpt-4o          - 最新多模态模型
-  • gpt-4-turbo     - GPT-4 Turbo
-  • gpt-4           - GPT-4
-  • gpt-3.5-turbo   - GPT-3.5 Turbo
-
-Anthropic Claude 系列:
-  • claude-3-5-sonnet-20241022  - Claude 3.5 Sonnet
-  • claude-3-opus-20240229      - Claude 3 Opus
-  • claude-3-sonnet-20240229    - Claude 3 Sonnet
-
-使用方法:
-  /model gpt-4o
-  /model claude-3-5-sonnet-20241022`)
-
-	case "/model-reset":
-		a.brain.ResetModel()
-		defaultModel := a.brain.GetDefaultModel()
-		a.addMessage("assistant", fmt.Sprintf("✅ 已重置为默认模型: %s", defaultModel))
-		a.updateStatus(fmt.Sprintf("模型: %s", defaultModel))
-
-	case "/status":
-		msgCount := len(a.messages)
-		historyCount := len(a.brain.GetHistory())
-		currentModel := a.brain.GetModel()
-		a.addMessage("assistant", fmt.Sprintf(`📊 系统状态
-
-💬 对话信息
-  • 当前消息: %d 条
-  • 历史记录: %d 条
-  • 流式状态: %v
-
-🤖 模型配置
-  • 当前模型: %s
-  • 默认模型: %s
-
-🖥️  界面信息
-  • 窗口大小: %d × %d
-  • 时间: %s
-
-💾 存储位置
-  • 数据库: .kele/memory.db
-  • 记忆文件: .kele/MEMORY.md
-  • 会话目录: .kele/sessions/`,
-			msgCount,
-			historyCount,
-			a.streaming,
-			currentModel,
-			a.brain.GetDefaultModel(),
-			a.width,
-			a.height,
-			time.Now().Format("2006-01-02 15:04:05"),
-		))
-
-	case "/config":
-		currentModel := a.brain.GetModel()
-		a.addMessage("assistant", fmt.Sprintf(`⚙️  当前配置
-
-环境变量:
-  • OPENAI_API_BASE: %s
-  • OPENAI_MODEL: %s
-
-运行时配置:
-  • 当前模型: %s
-  • 最大轮次: 20
-  • 流式响应: 启用`,
-			getEnv("OPENAI_API_BASE", "默认"),
-			getEnv("OPENAI_MODEL", "gpt-4o"),
-			currentModel,
-		))
-
-	case "/history":
-		history := a.brain.GetHistory()
-		var historyText strings.Builder
-		historyText.WriteString("📜 完整对话历史\n\n")
-		for i, msg := range history {
-			historyText.WriteString(fmt.Sprintf("%d. [%s] %s\n\n",
-				i+1,
-				msg.Role,
-				truncateString(msg.Content, 100),
-			))
-		}
-		if len(history) == 0 {
-			historyText.WriteString("(暂无历史记录)")
-		}
-		a.addMessage("assistant", historyText.String())
-
-	case "/remember":
-		if len(args) == 0 {
-			a.addMessage("assistant", "❌ 用法: /remember <要记住的内容>")
-		} else {
-			text := strings.Join(args, " ")
-			key := fmt.Sprintf("note_%d", time.Now().Unix())
-			err := a.brain.SaveMemory(key, text)
-			if err != nil {
-				a.addMessage("assistant", fmt.Sprintf("❌ 保存失败: %v", err))
-			} else {
-				a.addMessage("assistant", "✅ 已添加到长期记忆")
-			}
-		}
-
-	case "/search":
-		if len(args) == 0 {
-			a.addMessage("assistant", "❌ 用法: /search <搜索关键词>")
-		} else {
-			query := strings.Join(args, " ")
-			results, err := a.brain.SearchMemory(query)
-			if err != nil {
-				a.addMessage("assistant", fmt.Sprintf("❌ 搜索失败: %v", err))
-			} else if len(results) == 0 {
-				a.addMessage("assistant", "🔍 未找到相关记忆")
-			} else {
-				var resultText strings.Builder
-				resultText.WriteString(fmt.Sprintf("🔍 搜索结果 (%d 条):\n\n", len(results)))
-				for i, result := range results {
-					resultText.WriteString(fmt.Sprintf("%d. %s\n\n", i+1, result))
-				}
-				a.addMessage("assistant", resultText.String())
-			}
-		}
-
-	case "/memory":
-		a.addMessage("assistant", `💭 记忆系统
-
-可用命令:
-  /remember <text>  - 添加到长期记忆
-  /search <query>   - 搜索记忆
-
-记忆文件: .kele/MEMORY.md
-数据库: .kele/memory.db`)
-
-	case "/tokens":
-		// TODO: 实现 token 计数
-		a.addMessage("assistant", `📊 Token 使用情况
-
-当前会话:
-  • 输入 tokens: 估算中
-  • 输出 tokens: 估算中
-  • 总计: 估算中
-
-💡 提示: Token 计数功能开发中`)
-
-	case "/save":
-		a.addMessage("assistant", "✅ 会话已自动保存到 .kele/sessions/")
-
-	case "/export":
-		var export strings.Builder
-		export.WriteString("# Kele 对话导出\n\n")
-		export.WriteString(fmt.Sprintf("**导出时间**: %s\n\n", time.Now().Format("2006-01-02 15:04:05")))
-		export.WriteString("---\n\n")
-		for _, msg := range a.messages {
-			if msg.Role == "user" {
-				export.WriteString(fmt.Sprintf("## 👤 User\n\n%s\n\n", msg.Content))
-			} else {
-				export.WriteString(fmt.Sprintf("## 🤖 Assistant\n\n%s\n\n", msg.Content))
-			}
-		}
-		filename := fmt.Sprintf(".kele/export_%s.md", time.Now().Format("20060102_150405"))
-		// TODO: 实际写入文件
-		a.addMessage("assistant", fmt.Sprintf("✅ 对话已导出: %s\n\n(功能开发中)", filename))
-
-	case "/debug":
-		a.addMessage("assistant", fmt.Sprintf(`🐛 调试信息
-
-Go 版本: %s
-消息数: %d
-流式状态: %v
-事件通道: %v
-缓冲区大小: %d`,
-			"1.25.3",
-			len(a.messages),
-			a.streaming,
-			a.eventChan != nil,
-			len(a.streamBuffer),
-		))
-
-	case "/exit", "/quit":
-		a.addMessage("assistant", "👋 再见！")
-		// 休眠1秒后退出
-		time.Sleep(1 * time.Second)
-		a.quit()
-	default:
-		a.addMessage("assistant", fmt.Sprintf("❓ 未知命令: %s\n\n输入 /help 查看可用命令", cmd))
-	}
-
-	a.viewport.SetContent(a.renderMessages())
-	a.viewport.GotoBottom()
-}
-func (a *App) quit() {
-	os.Exit(0)
-}
-
-// getEnv 获取环境变量
-func getEnv(key, defaultValue string) string {
-	value := os.Getenv(key)
-	if value == "" {
-		return defaultValue
-	}
-	return value
-}
-
-// truncateString 截断字符串
-func truncateString(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
-// completeCommand 命令补全
-func (a *App) completeCommand(input string) string {
-	parts := strings.Fields(input)
-	if len(parts) == 0 {
-		return input
-	}
-
-	prefix := strings.ToLower(parts[0])
-	var matches []string
-
-	// 查找匹配的命令
-	for _, cmd := range allCommands {
-		if strings.HasPrefix(strings.ToLower(cmd), prefix) {
-			matches = append(matches, cmd)
-		}
-	}
-
-	// 没有匹配
-	if len(matches) == 0 {
-		return input
-	}
-
-	// 只有一个匹配，直接补全
-	if len(matches) == 1 {
-		// 如果有参数，保留参数
-		if len(parts) > 1 {
-			return matches[0] + " " + strings.Join(parts[1:], " ")
-		}
-		return matches[0] + " "
-	}
-
-	// 多个匹配，显示候选并返回最长公共前缀
-	a.showCompletionCandidates(matches)
-	commonPrefix := findCommonPrefix(matches)
-
-	// 如果公共前缀比当前输入长，使用公共前缀
-	if len(commonPrefix) > len(prefix) {
-		if len(parts) > 1 {
-			return commonPrefix + " " + strings.Join(parts[1:], " ")
-		}
-		return commonPrefix
-	}
-
-	return input
-}
-
-// completeAtReference @ 文件路径补全
-func (a *App) completeAtReference(input string) string {
-	// 找到最后一个 @ 的位置
-	lastAt := strings.LastIndex(input, "@")
-	if lastAt == -1 {
-		return input
-	}
-
-	// 提取 @ 后面的部分
-	prefix := input[:lastAt+1]
-	partial := input[lastAt+1:]
-
-	// 补全文件路径
-	completed, candidates := completeFilePath(partial)
-
-	if len(candidates) == 0 {
-		return input
-	}
-
-	if len(candidates) == 1 {
-		return prefix + completed
-	}
-
-	// 多个匹配，显示候选
-	var display []string
-	for _, c := range candidates {
-		display = append(display, "@"+c)
-	}
-	a.showCompletionCandidates(display)
-
-	if len(completed) > len(partial) {
-		return prefix + completed
-	}
-
-	return input
-}
-
-// showCompletionCandidates 显示候选命令
-func (a *App) showCompletionCandidates(candidates []string) {
-	if len(candidates) == 0 {
-		return
-	}
-
-	var hint strings.Builder
-	hint.WriteString("💡 可用命令: ")
-	hint.WriteString(strings.Join(candidates, ", "))
-
-	a.updateStatus(hint.String())
-}
-
-// findCommonPrefix 查找字符串数组的最长公共前缀
-func findCommonPrefix(strs []string) string {
-	if len(strs) == 0 {
-		return ""
-	}
-	if len(strs) == 1 {
-		return strs[0]
-	}
-
-	prefix := strs[0]
-	for i := 1; i < len(strs); i++ {
-		for !strings.HasPrefix(strings.ToLower(strs[i]), strings.ToLower(prefix)) {
-			prefix = prefix[:len(prefix)-1]
-			if prefix == "" {
-				return ""
-			}
-		}
-	}
-
-	return prefix
+	sess := a.currentSession()
+	a.statusContent = fmt.Sprintf("Kele | %s | %s", sess.brain.GetModel(), status)
 }

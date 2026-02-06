@@ -280,6 +280,26 @@ func completeFilePath(partial string) (string, []string) {
 	return partial, candidates
 }
 
+// findCommonPrefix 查找字符串数组的最长公共前缀
+func findCommonPrefix(strs []string) string {
+	if len(strs) == 0 {
+		return ""
+	}
+	if len(strs) == 1 {
+		return strs[0]
+	}
+	prefix := strs[0]
+	for i := 1; i < len(strs); i++ {
+		for !strings.HasPrefix(strings.ToLower(strs[i]), strings.ToLower(prefix)) {
+			prefix = prefix[:len(prefix)-1]
+			if prefix == "" {
+				return ""
+			}
+		}
+	}
+	return prefix
+}
+
 // formatSize 格式化文件大小
 func formatSize(size int64) string {
 	switch {
