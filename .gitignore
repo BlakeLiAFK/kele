@@ -1,0 +1,33 @@
+# 编译产物
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 测试
+*.test
+*.out
+coverage.html
+
+# 运行时数据
+.kele/memory.db
+.kele/sessions/
+.kele/MEMORY.md
+.kele/export_*.md
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+._*
+
+# 环境变量
+.env
+.env.local

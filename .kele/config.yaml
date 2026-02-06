@@ -1,0 +1,54 @@
+# Kele 配置文件
+# 注意：当前版本主要通过环境变量配置，此文件仅作为参考
+
+# LLM 配置
+# 实际使用环境变量：
+# - OPENAI_API_BASE: API 端点地址（默认: https://api.openai.com/v1）
+# - OPENAI_API_KEY: API 密钥（必需）
+# - OPENAI_MODEL: 模型名称（默认: gpt-4o）
+llm:
+  # 示例配置
+  api_base: ${OPENAI_API_BASE}
+  api_key: ${OPENAI_API_KEY}
+  model: ${OPENAI_MODEL:-gpt-4o}
+  max_tokens: 4096
+  temperature: 0.7
+
+# 记忆系统
+memory:
+  enabled: true
+  database: .kele/memory.db
+  markdown: .kele/MEMORY.md
+  session_dir: .kele/sessions
+
+# 工具系统
+tools:
+  enabled:
+    - bash
+    - read
+    - write
+
+  bash:
+    # 允许的命令（未实现严格白名单）
+    allowed_commands:
+      - ls
+      - cat
+      - grep
+      - find
+      - pwd
+      - echo
+      - git
+      - make
+
+    # 禁止的命令（已实现检查）
+    forbidden_patterns:
+      - rm -rf
+      - dd if=
+      - mkfs
+      - "> /dev/"
+
+# TUI 界面
+ui:
+  theme: default
+  typing_effect: true
+  context_length: 20  # 保留的对话轮数
