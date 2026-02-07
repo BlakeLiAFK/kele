@@ -41,6 +41,12 @@ func (a *App) handleKeyMsg(keyMsg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 	}
 
 	switch {
+	// Ctrl+E: 切换 Thinking 块展开/折叠
+	case keyMsg.Type == tea.KeyCtrlE:
+		a.thinkingExpanded = !a.thinkingExpanded
+		a.refreshViewport()
+		return true, nil
+
 	// Ctrl+Right / Ctrl+]: 切换到下一个会话（循环）
 	case keyMsg.Type == tea.KeyCtrlRight || keyMsg.Type == tea.KeyCtrlCloseBracket:
 		if len(a.sessions) > 1 {

@@ -34,10 +34,11 @@ type ToolCall struct {
 
 // StreamEvent LLM 层流式事件
 type StreamEvent struct {
-	Type      string     // content, tool_calls, done, error
-	Content   string
-	ToolCalls []ToolCall
-	Error     error
+	Type             string     // content, reasoning, tool_calls, done, error
+	Content          string
+	ReasoningContent string
+	ToolCalls        []ToolCall
+	Error            error
 }
 
 // ChatRequest 聊天请求
@@ -77,9 +78,10 @@ type StreamChunk struct {
 	Choices []struct {
 		Index int `json:"index"`
 		Delta struct {
-			Role      string     `json:"role,omitempty"`
-			Content   string     `json:"content,omitempty"`
-			ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+			Role             string     `json:"role,omitempty"`
+			Content          string     `json:"content,omitempty"`
+			ReasoningContent string     `json:"reasoning_content,omitempty"`
+			ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason *string `json:"finish_reason"`
 	} `json:"choices"`

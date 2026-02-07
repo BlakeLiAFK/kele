@@ -367,7 +367,7 @@ func TestBubbleRendering(t *testing.T) {
 		{Role: "assistant", Content: "hi there"},
 	}
 
-	rendered := renderMessages(msgs, 80)
+	rendered := renderMessages(msgs, 80, false, 0)
 	if !strings.Contains(rendered, "You") {
 		t.Error("应包含 'You' 标签")
 	}
@@ -409,5 +409,191 @@ func TestCtrlO(t *testing.T) {
 
 	if app.overlayMode != "" {
 		t.Error("再按 Ctrl+O 应关闭设置面板")
+	}
+}
+
+// TestThinkingBlockRendering 测试 Thinking 块渲染
+func TestThinkingBlockRendering(t *testing.T) {
+	// 流式中无 thinking 内容 - 显示动画
+	msgs := []Message{
+		{Role: "assistant", Content: "", IsStream: true},
+	}
+	rendered := renderMessages(msgs, 80, false, 0)
+	if !strings.Contains(rendered, "Thinking") {
+		t.Error("流式中应显示 Thinking 动画")
+	}
+
+	// 流式中有 thinking 内容
+	msgs = []Message{
+		{Role: "assistant", Content: "", Thinking: "let me analyze this", IsStream: true},
+	}
+	rendered = renderMessages(msgs, 80, false, 0)
+	if !strings.Contains(rendered, "Thinking") {
+		t.Error("有 thinking 内容时应显示 Thinking 标签")
+	}
+	if !strings.Contains(rendered, "let me analyze this") {
+		t.Error("应包含 thinking 内容")
+	}
+
+	// 完成后折叠状态
+	msgs = []Message{
+		{Role: "assistant", Content: "the answer is 42", Thinking: "thinking line 1\nthinking line 2", IsStream: false},
+	}
+	rendered = renderMessages(msgs, 80, false, 0)
+	if !strings.Contains(rendered, "Thinking") {
+		t.Error("完成后折叠应显示 Thinking 标签")
+	}
+	if !strings.Contains(rendered, "the answer is 42") {
+		t.Error("应包含回答内容")
+	}
+
+	// 完成后展开状态
+	rendered = renderMessages(msgs, 80, true, 0)
+	if !strings.Contains(rendered, "thinking line 1") {
+		t.Error("展开后应显示完整 thinking 内容")
+	}
+	if !strings.Contains(rendered, "thinking line 2") {
+		t.Error("展开后应显示所有 thinking 行")
+	}
+
+	t.Logf("折叠渲染:\n%s", renderMessages(msgs, 80, false, 0))
+	t.Logf("展开渲染:\n%s", renderMessages(msgs, 80, true, 0))
+}
+
+// TestCtrlE 测试 Ctrl+E 切换 Thinking 展开/折叠
+func TestCtrlE(t *testing.T) {
+	app := NewApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	app = model.(*App)
+
+	// 默认折叠
+	if app.thinkingExpanded {
+		t.Error("默认应为折叠状态")
+	}
+
+	// Ctrl+E 展开
+	ctrlE := tea.KeyMsg{Type: tea.KeyCtrlE}
+	model, _ = app.Update(ctrlE)
+	app = model.(*App)
+
+	if !app.thinkingExpanded {
+		t.Error("Ctrl+E 后应为展开状态")
+	}
+
+	// 再次 Ctrl+E 折叠
+	model, _ = app.Update(ctrlE)
+	app = model.(*App)
+
+	if app.thinkingExpanded {
+		t.Error("再次 Ctrl+E 后应回到折叠状态")
+	}
+}
+
+// TestCompletionState 测试补全状态追踪
+func TestCompletionState(t *testing.T) {
+	app := NewApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	app = model.(*App)
+
+	// 初始状态为空
+	if app.completionState != "" {
+		t.Errorf("初始补全状态应为空, 实际 %q", app.completionState)
+	}
+
+	// 输入 "/" 触发本地补全 -> 状态变为 done
+	keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'/'}}
+	model, _ = app.Update(keyMsg)
+	app = model.(*App)
+
+	if app.completionState != "done" {
+		t.Errorf("本地补全后状态应为 'done', 实际 %q", app.completionState)
+	}
+
+	// 清空输入 -> 状态重置
+	app.textarea.SetValue("")
+	// 手动触发输入变化
+	app.onInputChanged("")
+	if app.completionState != "" {
+		t.Errorf("清空输入后补全状态应为空, 实际 %q", app.completionState)
+	}
+}
+
+// TestCompletionStatusRendering 测试补全状态指示器渲染
+func TestCompletionStatusRendering(t *testing.T) {
+	// loading 状态
+	status := renderCompletionStatus("loading", "", 0)
+	if !strings.Contains(status, "AI") {
+		t.Error("loading 状态应包含 AI 标记")
+	}
+
+	// error 状态
+	status = renderCompletionStatus("error", "connection timeout", 0)
+	if !strings.Contains(status, "connection timeout") {
+		t.Error("error 状态应包含错误信息")
+	}
+
+	// done 状态
+	status = renderCompletionStatus("done", "", 0)
+	if !strings.Contains(status, "OK") {
+		t.Error("done 状态应显示 OK")
+	}
+
+	// idle 状态
+	status = renderCompletionStatus("", "", 0)
+	if status != "" {
+		t.Error("idle 状态应为空")
+	}
+}
+
+// TestStreamMsgThinking 测试流式消息中的 thinking 处理
+func TestStreamMsgThinking(t *testing.T) {
+	app := NewApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	app = model.(*App)
+
+	sess := app.currentSession()
+	sess.AddMessage("assistant", "")
+	sess.messages[len(sess.messages)-1].IsStream = true
+	sess.streaming = true
+
+	// 模拟收到 thinking 消息
+	thinkMsg := streamMsg{
+		sessionID: sess.id,
+		thinking:  "analyzing the problem",
+	}
+	app.handleStreamMsg(thinkMsg)
+
+	if sess.thinkingBuffer != "analyzing the problem" {
+		t.Errorf("thinkingBuffer 应为 'analyzing the problem', 实际 %q", sess.thinkingBuffer)
+	}
+
+	lastMsg := sess.messages[len(sess.messages)-1]
+	if lastMsg.Thinking != "analyzing the problem" {
+		t.Errorf("消息 Thinking 应为 'analyzing the problem', 实际 %q", lastMsg.Thinking)
+	}
+
+	// 模拟收到更多 thinking
+	thinkMsg2 := streamMsg{
+		sessionID: sess.id,
+		thinking:  " step by step",
+	}
+	app.handleStreamMsg(thinkMsg2)
+
+	if sess.thinkingBuffer != "analyzing the problem step by step" {
+		t.Errorf("thinkingBuffer 应累积, 实际 %q", sess.thinkingBuffer)
+	}
+
+	// 模拟 done
+	doneMsg := streamMsg{
+		sessionID: sess.id,
+		done:      true,
+	}
+	app.handleStreamMsg(doneMsg)
+
+	if sess.thinkingBuffer != "" {
+		t.Error("done 后 thinkingBuffer 应被清空")
+	}
+	if sess.streaming {
+		t.Error("done 后 streaming 应为 false")
 	}
 }

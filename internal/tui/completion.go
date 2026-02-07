@@ -15,6 +15,7 @@ import (
 type completionMsg struct {
 	input      string // 发起请求时的输入（用于校验是否过期）
 	suggestion string // 补全建议（完整文本，含已输入部分）
+	err        error  // 补全错误
 }
 
 // CompletionEngine 补全引擎
@@ -142,8 +143,11 @@ func (e *CompletionEngine) AIComplete(input string, history []llm.Message) tea.C
 
 		// 调用小模型
 		result, err := e.brain.Complete(input, history)
-		if err != nil || result == "" {
-			return nil
+		if err != nil {
+			return completionMsg{input: input, err: err}
+		}
+		if result == "" {
+			return completionMsg{input: input}
 		}
 
 		// 确保返回值以当前输入为前缀

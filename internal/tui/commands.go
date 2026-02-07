@@ -29,6 +29,7 @@ func (a *App) handleCommand(cmd string) {
   Up/Down          浏览输入历史
   ESC x2           打断任务链（2秒内按两次）
   Ctrl+C x2        退出程序（2秒内按两次）
+  Ctrl+E           展开/折叠 Thinking
   Ctrl+O           设置面板
   Ctrl+T           新建会话
   Ctrl+W           关闭当前会话

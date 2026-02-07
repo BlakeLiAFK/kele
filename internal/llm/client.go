@@ -274,6 +274,11 @@ func (c *Client) ChatStream(messages []Message, tools []Tool) <-chan StreamEvent
 
 			delta := chunk.Choices[0].Delta
 
+			// 推理内容（DeepSeek 等模型）
+			if delta.ReasoningContent != "" {
+				eventChan <- StreamEvent{Type: "reasoning", ReasoningContent: delta.ReasoningContent}
+			}
+
 			// 文本内容
 			if delta.Content != "" {
 				eventChan <- StreamEvent{Type: "content", Content: delta.Content}

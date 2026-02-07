@@ -8,9 +8,9 @@ import (
 )
 
 // renderMessages 渲染所有消息为气泡样式
-func renderMessages(messages []Message, width int) string {
+func renderMessages(messages []Message, width int, thinkingExpanded bool, spinnerFrame int) string {
 	var b strings.Builder
-	maxBubble := width * 3 / 4 // 气泡最大宽度为屏幕 3/4
+	maxBubble := width * 3 / 4
 	if maxBubble < 30 {
 		maxBubble = 30
 	}
@@ -22,7 +22,7 @@ func renderMessages(messages []Message, width int) string {
 		case strings.Contains(msg.Content, "tool:"):
 			b.WriteString(renderToolMessage(msg.Content, maxBubble))
 		default:
-			b.WriteString(renderAIBubble(msg.Content, msg.IsStream, maxBubble))
+			b.WriteString(renderAIBubble(msg, thinkingExpanded, spinnerFrame, maxBubble))
 		}
 		b.WriteString("\n")
 	}
@@ -31,14 +31,11 @@ func renderMessages(messages []Message, width int) string {
 
 // renderUserBubble 渲染用户消息（右对齐气泡）
 func renderUserBubble(content string, termWidth, maxBubble int) string {
-	// 标签
 	label := userLabelStyle.Render("You")
-	// 气泡内容
 	bubble := userBubbleStyle.
 		MaxWidth(maxBubble).
 		Render(content)
 
-	// 计算右对齐
 	bubbleWidth := lipgloss.Width(bubble)
 	labelWidth := lipgloss.Width(label)
 
@@ -56,19 +53,88 @@ func renderUserBubble(content string, termWidth, maxBubble int) string {
 		strings.Repeat(" ", pad), bubble)
 }
 
-// renderAIBubble 渲染 AI 消息（左对齐气泡）
-func renderAIBubble(content string, isStream bool, maxBubble int) string {
+// renderAIBubble 渲染 AI 消息（左对齐气泡，含 Thinking 块）
+func renderAIBubble(msg Message, thinkingExpanded bool, spinnerFrame int, maxBubble int) string {
+	var parts []string
+
 	label := aiLabelStyle.Render("Kele")
-	displayContent := content
-	if isStream {
-		displayContent += "\u258b" // 闪烁光标
+	parts = append(parts, fmt.Sprintf("  %s", label))
+
+	// 渲染 Thinking 块
+	if msg.Thinking != "" || (msg.IsStream && msg.Content == "") {
+		thinkingBlock := renderThinkingBlock(msg.Thinking, msg.IsStream, thinkingExpanded, spinnerFrame, maxBubble)
+		parts = append(parts, thinkingBlock)
 	}
 
-	bubble := aiBubbleStyle.
-		MaxWidth(maxBubble).
-		Render(displayContent)
+	// 渲染内容
+	displayContent := msg.Content
+	if msg.IsStream && displayContent != "" {
+		displayContent += "\u258b"
+	}
 
-	return fmt.Sprintf("  %s\n  %s", label, bubble)
+	if displayContent != "" {
+		bubble := aiBubbleStyle.
+			MaxWidth(maxBubble).
+			Render(displayContent)
+		parts = append(parts, fmt.Sprintf("  %s", bubble))
+	}
+
+	return strings.Join(parts, "\n")
+}
+
+// renderThinkingBlock 渲染思考过程块
+func renderThinkingBlock(thinking string, isStreaming, expanded bool, spinnerFrame int, maxBubble int) string {
+	spinner := spinnerFrames[spinnerFrame%len(spinnerFrames)]
+
+	// 流式中：始终展开，显示 spinner
+	if isStreaming {
+		if thinking == "" {
+			// 等待推理内容，只显示动画
+			label := thinkingLabelStyle.Render(fmt.Sprintf("  [%s Thinking...]", spinner))
+			return label
+		}
+		// 有推理内容，展开显示
+		label := thinkingLabelStyle.Render(fmt.Sprintf("  [%s Thinking]", spinner))
+		content := renderThinkingContent(thinking, maxBubble)
+		return label + "\n" + content
+	}
+
+	// 已完成：根据 expanded 状态决定展开/折叠
+	if thinking == "" {
+		return ""
+	}
+
+	lines := strings.Split(strings.TrimRight(thinking, "\n"), "\n")
+	lineCount := len(lines)
+
+	if expanded {
+		// 展开：显示全部内容
+		label := thinkingLabelStyle.Render(fmt.Sprintf("  [Thinking] (%d%s, Ctrl+E %s)", lineCount, "\u884c", "\u6298\u53e0"))
+		content := renderThinkingContent(thinking, maxBubble)
+		return label + "\n" + content
+	}
+
+	// 折叠：显示最后一行摘要
+	lastLine := lines[lineCount-1]
+	if len([]rune(lastLine)) > 40 {
+		lastLine = string([]rune(lastLine)[:40]) + "..."
+	}
+	label := thinkingLabelStyle.Render(
+		fmt.Sprintf("  [Thinking] ...%s (%d%s, Ctrl+E %s)", lastLine, lineCount, "\u884c", "\u5c55\u5f00"))
+	return label
+}
+
+// renderThinkingContent 渲染思考内容文本
+func renderThinkingContent(thinking string, maxBubble int) string {
+	lines := strings.Split(strings.TrimRight(thinking, "\n"), "\n")
+	var rendered []string
+	for _, line := range lines {
+		styled := thinkingContentStyle.
+			MaxWidth(maxBubble).
+			Render(line)
+		rendered = append(rendered, styled)
+	}
+	return strings.Join(rendered, "\n")
 }
 
 // renderToolMessage 渲染工具执行消息
@@ -93,7 +159,6 @@ func renderTabBar(sessions []*Session, activeIdx, width int) string {
 
 	tabBar := lipgloss.JoinHorizontal(lipgloss.Top, tabs...)
 
-	// 右侧填充状态信息
 	tabWidth := lipgloss.Width(tabBar)
 	remaining := width - tabWidth
 	if remaining > 0 {
@@ -104,16 +169,29 @@ func renderTabBar(sessions []*Session, activeIdx, width int) string {
 	return tabBar
 }
 
-// renderCompletionHint 渲染补全候选行
-func renderCompletionHintLine(hint string, width int) string {
+// renderCompletionHintLine 渲染补全候选行 + 补全状态
+func renderCompletionHintLine(hint, completionState, completionError string, spinnerFrame int, width int) string {
 	emptyStyle := lipgloss.NewStyle().Width(width)
 
-	if hint == "" {
+	// 补全状态指示器
+	statusIndicator := renderCompletionStatus(completionState, completionError, spinnerFrame)
+
+	if hint == "" && statusIndicator == "" {
 		return emptyStyle.Render("")
 	}
 
+	// 只有状态没有提示
+	if hint == "" {
+		return emptyStyle.Render(statusIndicator)
+	}
+
+	// 有提示：左侧提示 + 右侧状态
 	prefix := "[Tab] "
-	maxContent := width - len(prefix) - 2
+	statusWidth := lipgloss.Width(statusIndicator)
+	maxContent := width - len(prefix) - statusWidth - 4
+	if maxContent < 10 {
+		maxContent = 10
+	}
 	if len([]rune(hint)) > maxContent {
 		hint = string([]rune(hint)[:maxContent-3]) + "..."
 	}
@@ -130,17 +208,45 @@ func renderCompletionHintLine(hint string, width int) string {
 		Bold(true).
 		Render(prefix)
 
-	return hintStyle.Render(prefixStyled + hint)
+	left := prefixStyled + hint
+	if statusIndicator != "" {
+		// 计算右对齐填充
+		leftWidth := lipgloss.Width(prefixStyled) + len([]rune(hint))
+		padLen := width - leftWidth - statusWidth - 4
+		if padLen < 1 {
+			padLen = 1
+		}
+		left = left + strings.Repeat(" ", padLen) + statusIndicator
+	}
+
+	return hintStyle.Render(left)
+}
+
+// renderCompletionStatus 渲染补全状态指示器
+func renderCompletionStatus(state, errMsg string, spinnerFrame int) string {
+	switch state {
+	case "loading":
+		spinner := spinnerFrames[spinnerFrame%len(spinnerFrames)]
+		return completionStatusStyle.Render(fmt.Sprintf("[AI: %s %s]", spinner, "\u8bf7\u6c42\u4e2d"))
+	case "error":
+		short := errMsg
+		if len([]rune(short)) > 20 {
+			short = string([]rune(short)[:20]) + "..."
+		}
+		return completionErrorStyle.Render(fmt.Sprintf("[AI: %s %s]", "\u5931\u8d25", short))
+	case "done":
+		return completionStatusStyle.Render("[AI: OK]")
+	default:
+		return ""
+	}
 }
 
 // renderOverlay 渲染 Ctrl+O 设置叠加层
 func renderOverlay(a *App, width, height int) string {
 	sess := a.currentSession()
 
-	// 标题
 	title := overlayTitleStyle.Width(width).Render("  Kele Settings  (Ctrl+O to close)")
 
-	// 内容
 	var content strings.Builder
 	content.WriteString(fmt.Sprintf("  Sessions (%d/%d)\n\n", len(a.sessions), maxSessions))
 	for i, s := range a.sessions {
@@ -159,6 +265,7 @@ func renderOverlay(a *App, width, height int) string {
 	content.WriteString("    Alt+1..9    Switch session\n")
 	content.WriteString("    Ctrl+T      New session\n")
 	content.WriteString("    Ctrl+W      Close session\n")
+	content.WriteString("    Ctrl+E      Toggle thinking\n")
 	content.WriteString("    Ctrl+J      Newline\n")
 	content.WriteString("    Up/Down     Input history\n")
 	content.WriteString("    Tab         Completion\n")

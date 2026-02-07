@@ -100,6 +100,9 @@ func (b *Brain) ChatStream(userInput string) (<-chan StreamEvent, error) {
 
 			for event := range llmEvents {
 				switch event.Type {
+				case "reasoning":
+					eventChan <- StreamEvent{Type: "reasoning", Content: event.ReasoningContent}
+
 				case "content":
 					roundContent += event.Content
 					eventChan <- StreamEvent{Type: "content", Content: event.Content}

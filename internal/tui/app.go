@@ -31,6 +31,7 @@ var allCommands = []string{
 type Message struct {
 	Role     string
 	Content  string
+	Thinking string // 推理/思考过程内容
 	IsStream bool
 }
 
@@ -50,10 +51,16 @@ type App struct {
 	quitting bool
 
 	// 补全
-	completion     *CompletionEngine
-	completionHint string
-	suggestion     string
-	aiPending      bool
+	completion      *CompletionEngine
+	completionHint  string
+	suggestion      string
+	aiPending       bool
+	completionState string // "" | "pending" | "loading" | "done" | "error"
+	completionError string // 补全错误信息
+
+	// Thinking 展示
+	thinkingExpanded bool // 全局切换：是否展开思考过程
+	thinkingFrame    int  // spinner 动画帧
 
 	// 状态
 	statusContent string
@@ -68,6 +75,7 @@ type App struct {
 type streamMsg struct {
 	sessionID  int    // 绑定到发起流式请求的会话
 	content    string
+	thinking   string // 推理/思考内容
 	done       bool
 	err        error
 	toolName   string // 工具调用名
@@ -82,12 +90,18 @@ type streamInitMsg struct {
 
 // streamEvent 内部流式事件
 type streamEvent struct {
-	Type       string // content, tool_call, tool_result, error, done
+	Type       string // content, thinking, tool_call, tool_result, error, done
 	Content    string
 	ToolName   string
 	ToolResult string
 	Error      string
 }
+
+// tickMsg 定时器消息（驱动 spinner 动画）
+type tickMsg struct{}
+
+// spinner 帧
+var spinnerFrames = []string{"\u28cb", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"}
 
 // NewApp 创建应用
 func NewApp() *App {
@@ -127,6 +141,18 @@ func (a *App) findSession(id int) *Session {
 	return nil
 }
 
+// tick 返回一个 100ms 后发送 tickMsg 的命令
+func tick() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		return tickMsg{}
+	})
+}
+
+// shouldTick 是否需要继续 tick（有动画需要更新）
+func (a *App) shouldTick() bool {
+	return a.currentSession().streaming || a.completionState == "loading"
+}
+
 // Init 初始化
 func (a *App) Init() tea.Cmd {
 	return textarea.Blink
@@ -150,13 +176,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// 处理其他消息
 	switch msg := msg.(type) {
+	case tickMsg:
+		a.thinkingFrame = (a.thinkingFrame + 1) % len(spinnerFrames)
+		if a.shouldTick() {
+			a.refreshViewport()
+			return a, tick()
+		}
+		return a, nil
+
 	case streamInitMsg:
 		sess := a.findSession(msg.sessionID)
 		if sess == nil {
 			return a, nil
 		}
 		sess.eventChan = msg.eventChan
-		return a, a.continueStreamFor(msg.sessionID)
+		return a, tea.Batch(a.continueStreamFor(msg.sessionID), tick())
 
 	case streamMsg:
 		return a, a.handleStreamMsg(msg)
@@ -214,7 +248,7 @@ func (a *App) View() string {
 	separator := separatorStyle.Width(a.width).Render(strings.Repeat("-", a.width))
 
 	// 补全提示行
-	hintLine := renderCompletionHintLine(a.completionHint, a.width)
+	hintLine := renderCompletionHintLine(a.completionHint, a.completionState, a.completionError, a.thinkingFrame, a.width)
 
 	// 输入区
 	inputArea := lipgloss.NewStyle().
@@ -239,7 +273,7 @@ func (a *App) View() string {
 // renderHelpLine 渲染底部帮助行
 func (a *App) renderHelpLine() string {
 	return helpStyle.Width(a.width).Render(
-		"Tab 补全 | Enter 发送 | Ctrl+J 换行 | Ctrl+O 设置 | Ctrl+C x2 退出")
+		"Tab 补全 | Enter 发送 | Ctrl+J 换行 | Ctrl+E 思考 | Ctrl+O 设置 | Ctrl+C x2 退出")
 }
 
 // handleEnter 处理 Enter 发送
@@ -290,9 +324,8 @@ func (a *App) handleEnter() tea.Cmd {
 	sess.messages[len(sess.messages)-1].IsStream = true
 	sess.streaming = true
 	sess.streamBuffer = ""
-	if len(refs) == 0 {
-		a.updateStatus("thinking...")
-	}
+	sess.thinkingBuffer = ""
+	a.updateStatus("Thinking...")
 
 	a.refreshViewport()
 
@@ -314,6 +347,8 @@ func (a *App) startStream(userInput string) tea.Cmd {
 			defer close(internalChan)
 			for ev := range eventChan {
 				switch ev.Type {
+				case "reasoning":
+					internalChan <- streamEvent{Type: "thinking", Content: ev.Content}
 				case "content":
 					internalChan <- streamEvent{Type: "content", Content: ev.Content}
 				case "tool_start":
@@ -356,6 +391,8 @@ func (a *App) continueStreamFor(sessionID int) tea.Cmd {
 			return streamMsg{sessionID: sessionID, done: true}
 		}
 		switch event.Type {
+		case "thinking":
+			return streamMsg{sessionID: sessionID, thinking: event.Content}
 		case "content":
 			return streamMsg{sessionID: sessionID, content: event.Content}
 		case "tool_call":
@@ -389,6 +426,19 @@ func (a *App) handleStreamMsg(msg streamMsg) tea.Cmd {
 		return nil
 	}
 
+	// 推理/思考事件
+	if msg.thinking != "" {
+		sess.thinkingBuffer += msg.thinking
+		lastIdx := len(sess.messages) - 1
+		if lastIdx >= 0 && sess.messages[lastIdx].IsStream {
+			sess.messages[lastIdx].Thinking = sess.thinkingBuffer
+		}
+		if isActive {
+			a.refreshViewport()
+		}
+		return a.continueStreamFor(msg.sessionID)
+	}
+
 	// 工具调用事件
 	if msg.toolName != "" && msg.toolResult == "" {
 		sess.taskRunning = true
@@ -419,12 +469,17 @@ func (a *App) handleStreamMsg(msg streamMsg) tea.Cmd {
 		sess.eventChan = nil
 		sess.streaming = false
 		sess.taskRunning = false
+		// 将 thinking 内容保留到最后的 stream 消息中
 		for i := range sess.messages {
 			if sess.messages[i].IsStream {
 				sess.messages[i].IsStream = false
+				if sess.thinkingBuffer != "" && sess.messages[i].Thinking == "" {
+					sess.messages[i].Thinking = sess.thinkingBuffer
+				}
 			}
 		}
 		sess.streamBuffer = ""
+		sess.thinkingBuffer = ""
 		if isActive {
 			a.updateStatus("Ready")
 			a.refreshViewport()
@@ -452,6 +507,8 @@ func (a *App) handleStreamMsg(msg streamMsg) tea.Cmd {
 func (a *App) onInputChanged(input string) tea.Cmd {
 	a.completionHint = ""
 	a.suggestion = ""
+	a.completionState = ""
+	a.completionError = ""
 	a.currentSession().ResetHistoryNav()
 
 	if input == "" {
@@ -462,6 +519,7 @@ func (a *App) onInputChanged(input string) tea.Cmd {
 	suggestions, candidates := a.completion.LocalComplete(input)
 	if len(suggestions) > 0 {
 		a.suggestion = suggestions[0]
+		a.completionState = "done"
 	}
 	if len(candidates) > 0 {
 		display := candidates
@@ -485,7 +543,8 @@ func (a *App) onInputChanged(input string) tea.Cmd {
 		aiCmd := a.completion.AIComplete(input, recent)
 		if aiCmd != nil {
 			a.aiPending = true
-			return aiCmd
+			a.completionState = "loading"
+			return tea.Batch(aiCmd, tick())
 		}
 	}
 
@@ -497,9 +556,16 @@ func (a *App) handleCompletionMsg(msg completionMsg) tea.Cmd {
 	a.aiPending = false
 	curInput := a.textarea.Value()
 	if curInput != msg.input {
+		a.completionState = ""
+		return nil
+	}
+	if msg.err != nil {
+		a.completionState = "error"
+		a.completionError = msg.err.Error()
 		return nil
 	}
 	if msg.suggestion != "" {
+		a.completionState = "done"
 		a.suggestion = msg.suggestion
 		if strings.HasPrefix(msg.suggestion, curInput) {
 			hint := msg.suggestion[len(curInput):]
@@ -509,6 +575,8 @@ func (a *App) handleCompletionMsg(msg completionMsg) tea.Cmd {
 		} else {
 			a.completionHint = msg.suggestion
 		}
+	} else {
+		a.completionState = ""
 	}
 	return nil
 }
@@ -583,7 +651,7 @@ func (a *App) closeSession() {
 // refreshViewport 刷新对话区
 func (a *App) refreshViewport() {
 	sess := a.currentSession()
-	a.viewport.SetContent(renderMessages(sess.messages, a.width))
+	a.viewport.SetContent(renderMessages(sess.messages, a.width, a.thinkingExpanded, a.thinkingFrame))
 	a.viewport.GotoBottom()
 }
 

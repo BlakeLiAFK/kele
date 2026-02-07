@@ -12,10 +12,11 @@ type Session struct {
 	name         string
 	messages     []Message
 	brain        *agent.Brain
-	streaming    bool
-	streamBuffer string
-	eventChan    <-chan streamEvent
-	draftInput   string // 切换会话时暂存的输入框内容
+	streaming       bool
+	streamBuffer    string
+	thinkingBuffer  string // 流式推理内容缓冲
+	eventChan       <-chan streamEvent
+	draftInput      string // 切换会话时暂存的输入框内容
 
 	// 输入历史（Up/Down 导航）
 	inputHistory []string

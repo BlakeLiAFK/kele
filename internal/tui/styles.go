@@ -75,4 +75,22 @@ var (
 				Foreground(lipgloss.Color("252")).
 				Background(lipgloss.Color("235")).
 				Padding(1, 2)
+
+	// Thinking 块样式（折叠状态的标签）
+	thinkingLabelStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("178")).
+				Bold(true)
+
+	// Thinking 块内容样式（展开时）
+	thinkingContentStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("243")).
+				PaddingLeft(4)
+
+	// 补全状态样式
+	completionStatusStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("243"))
+
+	// 补全状态错误样式
+	completionErrorStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("196"))
 )
