@@ -32,7 +32,8 @@ func (a *App) handleCommand(cmd string) {
   Ctrl+O           设置面板
   Ctrl+T           新建会话
   Ctrl+W           关闭当前会话
-  Ctrl+]           切换到下一个会话
+  Ctrl+Right       下一个会话
+  Ctrl+Left        上一个会话
   Alt+1..9         切换会话（需终端支持）
 
 @ 引用
@@ -96,7 +97,7 @@ func (a *App) handleCommand(cmd string) {
 			}
 			sb.WriteString(fmt.Sprintf("%s%d: %s (%d 条消息)\n", marker, i+1, s.name, len(s.messages)))
 		}
-		sb.WriteString(fmt.Sprintf("\n使用 Ctrl+] / Alt+N / /switch N 切换"))
+		sb.WriteString("\n使用 Ctrl+Right/Left / Alt+N / /switch N 切换")
 		sess.AddMessage("assistant", sb.String())
 
 	case "/switch":

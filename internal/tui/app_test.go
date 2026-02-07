@@ -137,21 +137,39 @@ func TestMultiSession(t *testing.T) {
 		t.Errorf("Alt+1 后应在第 1 个会话, 实际在 %d", app.activeIdx+1)
 	}
 
-	// Ctrl+] 切换到下一个会话
+	// Ctrl+Right 切换到下一个会话
+	ctrlRight := tea.KeyMsg{Type: tea.KeyCtrlRight}
+	model, _ = app.Update(ctrlRight)
+	app = model.(*App)
+
+	if app.activeIdx != 1 {
+		t.Errorf("Ctrl+Right 后应在第 2 个会话, 实际在 %d", app.activeIdx+1)
+	}
+
+	// Ctrl+Left 切回上一个会话
+	ctrlLeft := tea.KeyMsg{Type: tea.KeyCtrlLeft}
+	model, _ = app.Update(ctrlLeft)
+	app = model.(*App)
+
+	if app.activeIdx != 0 {
+		t.Errorf("Ctrl+Left 后应在第 1 个会话, 实际在 %d", app.activeIdx+1)
+	}
+
+	// Ctrl+Left 循环到最后一个
+	model, _ = app.Update(ctrlLeft)
+	app = model.(*App)
+
+	if app.activeIdx != 1 {
+		t.Errorf("Ctrl+Left 循环后应在第 2 个会话, 实际在 %d", app.activeIdx+1)
+	}
+
+	// Ctrl+] 也能切换（备用）
 	ctrlBracket := tea.KeyMsg{Type: tea.KeyCtrlCloseBracket}
 	model, _ = app.Update(ctrlBracket)
 	app = model.(*App)
 
-	if app.activeIdx != 1 {
-		t.Errorf("Ctrl+] 后应在第 2 个会话, 实际在 %d", app.activeIdx+1)
-	}
-
-	// Ctrl+] 再次循环回第一个
-	model, _ = app.Update(ctrlBracket)
-	app = model.(*App)
-
 	if app.activeIdx != 0 {
-		t.Errorf("Ctrl+] 循环后应在第 1 个会话, 实际在 %d", app.activeIdx+1)
+		t.Errorf("Ctrl+] 后应在第 1 个会话, 实际在 %d", app.activeIdx+1)
 	}
 
 	// Ctrl+W 关闭第 1 个会话（应切到剩余的会话）
@@ -207,13 +225,22 @@ func TestSessionTextareaPersistence(t *testing.T) {
 		t.Errorf("切回会话1后输入框应为 'hello from session 1', 实际 %q", app.textarea.Value())
 	}
 
-	// 切回会话 2 (Ctrl+])
-	ctrlBracket := tea.KeyMsg{Type: tea.KeyCtrlCloseBracket}
-	model, _ = app.Update(ctrlBracket)
+	// 切回会话 2 (Ctrl+Right)
+	ctrlRight := tea.KeyMsg{Type: tea.KeyCtrlRight}
+	model, _ = app.Update(ctrlRight)
 	app = model.(*App)
 
 	if app.textarea.Value() != "session 2 text" {
 		t.Errorf("切回会话2后输入框应为 'session 2 text', 实际 %q", app.textarea.Value())
+	}
+
+	// Ctrl+Left 切回会话 1
+	ctrlLeft := tea.KeyMsg{Type: tea.KeyCtrlLeft}
+	model, _ = app.Update(ctrlLeft)
+	app = model.(*App)
+
+	if app.textarea.Value() != "hello from session 1" {
+		t.Errorf("Ctrl+Left切回会话1后输入框应为 'hello from session 1', 实际 %q", app.textarea.Value())
 	}
 }
 

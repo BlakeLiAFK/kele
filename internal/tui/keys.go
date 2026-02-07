@@ -41,11 +41,19 @@ func (a *App) handleKeyMsg(keyMsg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 	}
 
 	switch {
-	// Ctrl+]: 切换到下一个会话（循环）
-	case keyMsg.Type == tea.KeyCtrlCloseBracket:
+	// Ctrl+Right / Ctrl+]: 切换到下一个会话（循环）
+	case keyMsg.Type == tea.KeyCtrlRight || keyMsg.Type == tea.KeyCtrlCloseBracket:
 		if len(a.sessions) > 1 {
 			next := (a.activeIdx + 1) % len(a.sessions)
 			a.switchSession(next)
+		}
+		return true, nil
+
+	// Ctrl+Left: 切换到上一个会话（循环）
+	case keyMsg.Type == tea.KeyCtrlLeft:
+		if len(a.sessions) > 1 {
+			prev := (a.activeIdx - 1 + len(a.sessions)) % len(a.sessions)
+			a.switchSession(prev)
 		}
 		return true, nil
 
