@@ -154,6 +154,7 @@ func renderOverlay(a *App, width, height int) string {
 	content.WriteString(fmt.Sprintf("\n  Model: %s\n", sess.brain.GetModel()))
 	content.WriteString(fmt.Sprintf("  Small Model: %s\n", sess.brain.GetSmallModel()))
 	content.WriteString(fmt.Sprintf("\n  Keybindings:\n"))
+	content.WriteString("    Ctrl+]      Next session\n")
 	content.WriteString("    Alt+1..9    Switch session\n")
 	content.WriteString("    Ctrl+T      New session\n")
 	content.WriteString("    Ctrl+W      Close session\n")

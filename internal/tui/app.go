@@ -37,8 +37,9 @@ type Message struct {
 // App 主应用
 type App struct {
 	// 多会话
-	sessions  []*Session
-	activeIdx int
+	sessions      []*Session
+	activeIdx     int
+	nextSessionID int // 全局递增会话 ID，避免关闭后重复
 
 	// UI 组件
 	viewport viewport.Model
@@ -65,15 +66,17 @@ type App struct {
 
 // streamMsg 流式消息
 type streamMsg struct {
-	content   string
-	done      bool
-	err       error
-	toolName  string // 工具调用名
+	sessionID  int    // 绑定到发起流式请求的会话
+	content    string
+	done       bool
+	err        error
+	toolName   string // 工具调用名
 	toolResult string // 工具执行结果
 }
 
 // streamInitMsg 流式初始化
 type streamInitMsg struct {
+	sessionID int
 	eventChan <-chan streamEvent
 }
 
@@ -99,10 +102,11 @@ func NewApp() *App {
 	firstSession := NewSession(1)
 
 	app := &App{
-		sessions:  []*Session{firstSession},
-		activeIdx: 0,
-		textarea:  ta,
-		completion: NewCompletionEngine(firstSession.brain),
+		sessions:      []*Session{firstSession},
+		activeIdx:     0,
+		nextSessionID: 2,
+		textarea:      ta,
+		completion:    NewCompletionEngine(firstSession.brain),
 	}
 	app.updateStatus("Ready")
 	return app
@@ -111,6 +115,16 @@ func NewApp() *App {
 // currentSession 获取当前活跃会话
 func (a *App) currentSession() *Session {
 	return a.sessions[a.activeIdx]
+}
+
+// findSession 按 ID 查找会话（会话可能已被关闭）
+func (a *App) findSession(id int) *Session {
+	for _, s := range a.sessions {
+		if s.id == id {
+			return s
+		}
+	}
+	return nil
 }
 
 // Init 初始化
@@ -137,9 +151,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	// 处理其他消息
 	switch msg := msg.(type) {
 	case streamInitMsg:
-		sess := a.currentSession()
+		sess := a.findSession(msg.sessionID)
+		if sess == nil {
+			return a, nil
+		}
 		sess.eventChan = msg.eventChan
-		return a, a.continueStream()
+		return a, a.continueStreamFor(msg.sessionID)
 
 	case streamMsg:
 		return a, a.handleStreamMsg(msg)
@@ -282,13 +299,14 @@ func (a *App) handleEnter() tea.Cmd {
 	return a.startStream(llmInput)
 }
 
-// startStream 开始流式响应
+// startStream 开始流式响应（绑定到当前会话 ID）
 func (a *App) startStream(userInput string) tea.Cmd {
 	sess := a.currentSession()
+	sessionID := sess.id
 	return func() tea.Msg {
 		eventChan, err := sess.brain.ChatStream(userInput)
 		if err != nil {
-			return streamMsg{err: err}
+			return streamMsg{sessionID: sessionID, err: err}
 		}
 		// 适配 agent.StreamEvent → streamEvent
 		internalChan := make(chan streamEvent, 100)
@@ -318,54 +336,62 @@ func (a *App) startStream(userInput string) tea.Cmd {
 				}
 			}
 		}()
-		return streamInitMsg{eventChan: internalChan}
+		return streamInitMsg{sessionID: sessionID, eventChan: internalChan}
 	}
 }
 
-// continueStream 继续接收流
-func (a *App) continueStream() tea.Cmd {
-	sess := a.currentSession()
+// continueStreamFor 继续接收指定会话的流
+func (a *App) continueStreamFor(sessionID int) tea.Cmd {
+	sess := a.findSession(sessionID)
+	if sess == nil {
+		return nil
+	}
 	ch := sess.eventChan
 	return func() tea.Msg {
 		if ch == nil {
-			return streamMsg{done: true}
+			return streamMsg{sessionID: sessionID, done: true}
 		}
 		event, ok := <-ch
 		if !ok {
-			return streamMsg{done: true}
+			return streamMsg{sessionID: sessionID, done: true}
 		}
 		switch event.Type {
 		case "content":
-			return streamMsg{content: event.Content}
+			return streamMsg{sessionID: sessionID, content: event.Content}
 		case "tool_call":
-			return streamMsg{toolName: event.ToolName}
+			return streamMsg{sessionID: sessionID, toolName: event.ToolName}
 		case "tool_result":
-			return streamMsg{toolName: event.ToolName, toolResult: event.ToolResult}
+			return streamMsg{sessionID: sessionID, toolName: event.ToolName, toolResult: event.ToolResult}
 		case "error":
-			return streamMsg{err: errors.New(event.Error)}
+			return streamMsg{sessionID: sessionID, err: errors.New(event.Error)}
 		default:
-			return streamMsg{done: true}
+			return streamMsg{sessionID: sessionID, done: true}
 		}
 	}
 }
 
-// handleStreamMsg 处理流式消息
+// handleStreamMsg 处理流式消息（按 sessionID 定位会话，支持跨会话切换）
 func (a *App) handleStreamMsg(msg streamMsg) tea.Cmd {
-	sess := a.currentSession()
+	sess := a.findSession(msg.sessionID)
+	if sess == nil {
+		return nil // 会话已关闭，丢弃事件
+	}
+	isActive := sess.id == a.currentSession().id
 
 	if msg.err != nil {
 		sess.streaming = false
 		sess.taskRunning = false
 		sess.eventChan = nil
 		sess.AddMessage("assistant", "Error: "+msg.err.Error())
-		a.refreshViewport()
+		if isActive {
+			a.refreshViewport()
+		}
 		return nil
 	}
 
 	// 工具调用事件
 	if msg.toolName != "" && msg.toolResult == "" {
 		sess.taskRunning = true
-		// 如果有空的流式占位，先定形
 		lastIdx := len(sess.messages) - 1
 		if lastIdx >= 0 && sess.messages[lastIdx].IsStream {
 			if sess.messages[lastIdx].Content == "" {
@@ -375,46 +401,51 @@ func (a *App) handleStreamMsg(msg streamMsg) tea.Cmd {
 			}
 		}
 		sess.AddMessage("assistant", fmt.Sprintf("tool: %s", msg.toolName))
-		a.updateStatus(fmt.Sprintf("executing %s...", msg.toolName))
-		a.refreshViewport()
-		return a.continueStream()
+		if isActive {
+			a.updateStatus(fmt.Sprintf("executing %s...", msg.toolName))
+			a.refreshViewport()
+		}
+		return a.continueStreamFor(msg.sessionID)
 	}
 	if msg.toolResult != "" {
 		sess.AddMessage("assistant", fmt.Sprintf("tool: %s -> %s", msg.toolName, truncateStr(msg.toolResult, 200)))
-		a.refreshViewport()
-		return a.continueStream()
+		if isActive {
+			a.refreshViewport()
+		}
+		return a.continueStreamFor(msg.sessionID)
 	}
 
 	if msg.done {
 		sess.eventChan = nil
 		sess.streaming = false
 		sess.taskRunning = false
-		// 定形所有流式消息
 		for i := range sess.messages {
 			if sess.messages[i].IsStream {
 				sess.messages[i].IsStream = false
 			}
 		}
 		sess.streamBuffer = ""
-		a.updateStatus("Ready")
-		a.refreshViewport()
+		if isActive {
+			a.updateStatus("Ready")
+			a.refreshViewport()
+		}
 		return nil
 	}
 
 	// 普通内容
 	lastIdx := len(sess.messages) - 1
 	if lastIdx >= 0 && sess.messages[lastIdx].IsStream {
-		// 已有流式消息，追加内容
 		sess.streamBuffer += msg.content
 		sess.messages[lastIdx].Content = sess.streamBuffer
 	} else {
-		// 工具执行后的新内容块，创建新流式消息
 		sess.streamBuffer = msg.content
 		sess.AddMessage("assistant", msg.content)
 		sess.messages[len(sess.messages)-1].IsStream = true
 	}
-	a.refreshViewport()
-	return a.continueStream()
+	if isActive {
+		a.refreshViewport()
+	}
+	return a.continueStreamFor(msg.sessionID)
 }
 
 // onInputChanged 输入变化时触发补全
@@ -491,7 +522,8 @@ func (a *App) createSession(name string) {
 		a.refreshViewport()
 		return
 	}
-	id := len(a.sessions) + 1
+	id := a.nextSessionID
+	a.nextSessionID++
 	s := NewSession(id)
 	if name != "" {
 		s.name = name
@@ -501,13 +533,20 @@ func (a *App) createSession(name string) {
 	a.updateStatus(fmt.Sprintf("新建会话: %s", s.name))
 }
 
-// switchSession 切换会话
+// switchSession 切换会话（保存/恢复输入框内容）
 func (a *App) switchSession(idx int) {
 	if idx < 0 || idx >= len(a.sessions) {
 		return
 	}
+	// 保存当前会话的输入框内容
+	if a.activeIdx != idx {
+		a.sessions[a.activeIdx].draftInput = a.textarea.Value()
+	}
 	a.activeIdx = idx
 	sess := a.currentSession()
+	// 恢复目标会话的输入框内容
+	a.textarea.SetValue(sess.draftInput)
+	a.textarea.CursorEnd()
 	a.completion = NewCompletionEngine(sess.brain)
 	a.completionHint = ""
 	a.suggestion = ""
@@ -515,18 +554,30 @@ func (a *App) switchSession(idx int) {
 	a.refreshViewport()
 }
 
-// closeSession 关闭当前会话
+// closeSession 关闭当前会话（优先切到左边）
 func (a *App) closeSession() {
 	if len(a.sessions) <= 1 {
 		a.currentSession().AddMessage("assistant", "无法关闭最后一个会话")
 		a.refreshViewport()
 		return
 	}
-	a.sessions = append(a.sessions[:a.activeIdx], a.sessions[a.activeIdx+1:]...)
-	if a.activeIdx >= len(a.sessions) {
-		a.activeIdx = len(a.sessions) - 1
+	closedIdx := a.activeIdx
+	a.sessions = append(a.sessions[:closedIdx], a.sessions[closedIdx+1:]...)
+	// 优先切到左边
+	newIdx := closedIdx - 1
+	if newIdx < 0 {
+		newIdx = 0
 	}
-	a.switchSession(a.activeIdx)
+	a.activeIdx = newIdx
+	// 直接恢复目标会话状态
+	sess := a.currentSession()
+	a.textarea.SetValue(sess.draftInput)
+	a.textarea.CursorEnd()
+	a.completion = NewCompletionEngine(sess.brain)
+	a.completionHint = ""
+	a.suggestion = ""
+	a.updateStatus("Ready")
+	a.refreshViewport()
 }
 
 // refreshViewport 刷新对话区

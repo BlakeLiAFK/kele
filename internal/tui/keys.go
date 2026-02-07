@@ -41,6 +41,14 @@ func (a *App) handleKeyMsg(keyMsg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 	}
 
 	switch {
+	// Ctrl+]: 切换到下一个会话（循环）
+	case keyMsg.Type == tea.KeyCtrlCloseBracket:
+		if len(a.sessions) > 1 {
+			next := (a.activeIdx + 1) % len(a.sessions)
+			a.switchSession(next)
+		}
+		return true, nil
+
 	// Ctrl+C: 双击退出
 	case keyMsg.Type == tea.KeyCtrlC:
 		now := time.Now()

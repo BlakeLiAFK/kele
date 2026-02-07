@@ -137,13 +137,116 @@ func TestMultiSession(t *testing.T) {
 		t.Errorf("Alt+1 后应在第 1 个会话, 实际在 %d", app.activeIdx+1)
 	}
 
-	// Ctrl+W 关闭（应该关闭第1个，切到第2个）
+	// Ctrl+] 切换到下一个会话
+	ctrlBracket := tea.KeyMsg{Type: tea.KeyCtrlCloseBracket}
+	model, _ = app.Update(ctrlBracket)
+	app = model.(*App)
+
+	if app.activeIdx != 1 {
+		t.Errorf("Ctrl+] 后应在第 2 个会话, 实际在 %d", app.activeIdx+1)
+	}
+
+	// Ctrl+] 再次循环回第一个
+	model, _ = app.Update(ctrlBracket)
+	app = model.(*App)
+
+	if app.activeIdx != 0 {
+		t.Errorf("Ctrl+] 循环后应在第 1 个会话, 实际在 %d", app.activeIdx+1)
+	}
+
+	// Ctrl+W 关闭第 1 个会话（应切到剩余的会话）
 	ctrlW := tea.KeyMsg{Type: tea.KeyCtrlW}
 	model, _ = app.Update(ctrlW)
 	app = model.(*App)
 
 	if len(app.sessions) != 1 {
 		t.Fatalf("关闭后应有 1 个会话, 实际 %d", len(app.sessions))
+	}
+}
+
+// TestSessionTextareaPersistence 测试会话切换时输入框内容持久化
+func TestSessionTextareaPersistence(t *testing.T) {
+	app := NewApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	app = model.(*App)
+
+	// 在会话 1 中输入一些文字
+	for _, r := range "hello from session 1" {
+		keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+		model, _ = app.Update(keyMsg)
+		app = model.(*App)
+	}
+
+	if app.textarea.Value() != "hello from session 1" {
+		t.Fatalf("会话1输入应为 'hello from session 1', 实际 %q", app.textarea.Value())
+	}
+
+	// Ctrl+T 新建会话 2
+	ctrlT := tea.KeyMsg{Type: tea.KeyCtrlT}
+	model, _ = app.Update(ctrlT)
+	app = model.(*App)
+
+	// 新会话输入框应为空
+	if app.textarea.Value() != "" {
+		t.Errorf("新会话输入框应为空, 实际 %q", app.textarea.Value())
+	}
+
+	// 在会话 2 中输入
+	for _, r := range "session 2 text" {
+		keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+		model, _ = app.Update(keyMsg)
+		app = model.(*App)
+	}
+
+	// 切回会话 1 (Alt+1)
+	alt1 := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'1'}, Alt: true}
+	model, _ = app.Update(alt1)
+	app = model.(*App)
+
+	if app.textarea.Value() != "hello from session 1" {
+		t.Errorf("切回会话1后输入框应为 'hello from session 1', 实际 %q", app.textarea.Value())
+	}
+
+	// 切回会话 2 (Ctrl+])
+	ctrlBracket := tea.KeyMsg{Type: tea.KeyCtrlCloseBracket}
+	model, _ = app.Update(ctrlBracket)
+	app = model.(*App)
+
+	if app.textarea.Value() != "session 2 text" {
+		t.Errorf("切回会话2后输入框应为 'session 2 text', 实际 %q", app.textarea.Value())
+	}
+}
+
+// TestSessionIDUniqueness 测试会话 ID 唯一性（关闭后新建不重复）
+func TestSessionIDUniqueness(t *testing.T) {
+	app := NewApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	app = model.(*App)
+
+	firstID := app.sessions[0].id
+
+	// 新建会话 2
+	ctrlT := tea.KeyMsg{Type: tea.KeyCtrlT}
+	model, _ = app.Update(ctrlT)
+	app = model.(*App)
+	secondID := app.sessions[1].id
+
+	if secondID <= firstID {
+		t.Errorf("第二个会话 ID(%d) 应大于第一个(%d)", secondID, firstID)
+	}
+
+	// 关闭会话 2
+	ctrlW := tea.KeyMsg{Type: tea.KeyCtrlW}
+	model, _ = app.Update(ctrlW)
+	app = model.(*App)
+
+	// 新建会话 3
+	model, _ = app.Update(ctrlT)
+	app = model.(*App)
+	thirdID := app.sessions[1].id
+
+	if thirdID <= secondID {
+		t.Errorf("第三个会话 ID(%d) 应大于第二个(%d), 不应重复", thirdID, secondID)
 	}
 }
 

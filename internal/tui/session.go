@@ -15,10 +15,11 @@ type Session struct {
 	streaming    bool
 	streamBuffer string
 	eventChan    <-chan streamEvent
+	draftInput   string // 切换会话时暂存的输入框内容
 
 	// 输入历史（Up/Down 导航）
 	inputHistory []string
-	historyIdx   int // -1 表示当前输入，0..n 表示历史
+	historyIdx   int    // -1 表示当前输入，0..n 表示历史
 	savedInput   string // 按 Up 前暂存当前输入
 
 	// 任务链
