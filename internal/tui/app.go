@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/BlakeLiAFK/kele/internal/cron"
 	"github.com/BlakeLiAFK/kele/internal/llm"
 )
 
@@ -25,6 +27,7 @@ var allCommands = []string{
 	"/status", "/config", "/history", "/tokens",
 	"/save", "/export", "/debug",
 	"/new", "/sessions", "/switch", "/rename",
+	"/cron",
 }
 
 // Message 消息
@@ -37,6 +40,9 @@ type Message struct {
 
 // App 主应用
 type App struct {
+	// 全局调度器
+	scheduler *cron.Scheduler
+
 	// 多会话
 	sessions      []*Session
 	activeIdx     int
@@ -112,10 +118,16 @@ func NewApp() *App {
 	ta.SetHeight(3)
 	ta.ShowLineNumbers = false
 
+	// 创建全局调度器
+	wd, _ := os.Getwd()
+	scheduler := cron.NewScheduler(".kele/memory.db", wd)
+	scheduler.Start()
+
 	// 创建第一个会话
-	firstSession := NewSession(1)
+	firstSession := NewSession(1, scheduler)
 
 	app := &App{
+		scheduler:     scheduler,
 		sessions:      []*Session{firstSession},
 		activeIdx:     0,
 		nextSessionID: 2,
@@ -622,7 +634,7 @@ func (a *App) createSession(name string) {
 	}
 	id := a.nextSessionID
 	a.nextSessionID++
-	s := NewSession(id)
+	s := NewSession(id, a.scheduler)
 	if name != "" {
 		s.name = name
 	}

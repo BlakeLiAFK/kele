@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/BlakeLiAFK/kele/internal/cron"
 	"github.com/BlakeLiAFK/kele/internal/llm"
 	"github.com/BlakeLiAFK/kele/internal/memory"
 	"github.com/BlakeLiAFK/kele/internal/tools"
@@ -19,10 +20,10 @@ type Brain struct {
 }
 
 // NewBrain 创建新大脑
-func NewBrain() *Brain {
+func NewBrain(scheduler *cron.Scheduler) *Brain {
 	return &Brain{
 		llmClient: llm.NewClient(),
-		executor:  tools.NewExecutor(),
+		executor:  tools.NewExecutor(scheduler),
 		memory:    memory.NewStore(),
 		history:   []llm.Message{},
 		maxTurns:  20,
@@ -228,6 +229,12 @@ func (b *Brain) getMessages() []llm.Message {
    - bash: 执行命令
    - read: 读取文件
    - write: 创建或修改文件
+3. 管理定时任务（cron）：
+   - cron_create: 创建定时任务（标准 cron 表达式）
+   - cron_list: 列出所有定时任务
+   - cron_get: 查看任务详情和执行日志
+   - cron_update: 更新任务（含暂停/恢复）
+   - cron_delete: 删除任务
 
 请用中文回答，保持简洁专业。当需要执行操作时，主动使用工具。`,
 	}

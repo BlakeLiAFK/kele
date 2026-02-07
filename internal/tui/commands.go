@@ -63,6 +63,10 @@ func (a *App) handleCommand(cmd string) {
   /search <query>   搜索记忆
   /memory           查看记忆摘要
 
+定时任务
+  /cron             查看定时任务列表
+  (创建/修改/删除请直接对话，AI 会使用工具)
+
 信息查看
   /status           显示系统状态
   /config           显示当前配置
@@ -289,6 +293,35 @@ AI补全中: %v
 			a.aiPending, len(a.completion.cache),
 			a.suggestion,
 			sess.brain.GetModel(), sess.brain.GetSmallModel()))
+
+	case "/cron":
+		if a.scheduler == nil {
+			sess.AddMessage("assistant", "定时任务调度器未初始化")
+		} else {
+			jobs, err := a.scheduler.ListJobs()
+			if err != nil {
+				sess.AddMessage("assistant", fmt.Sprintf("查询失败: %v", err))
+			} else if len(jobs) == 0 {
+				sess.AddMessage("assistant", "暂无定时任务\n\n通过对话让 AI 帮你创建，例如：\n  \"每5分钟检查一次磁盘空间\"\n  \"每天早上9点备份数据库\"")
+			} else {
+				var sb strings.Builder
+				sb.WriteString(fmt.Sprintf("定时任务 (%d 个)\n\n", len(jobs)))
+				for _, j := range jobs {
+					status := "启用"
+					if !j.Enabled {
+						status = "暂停"
+					}
+					nextStr := "-"
+					if j.NextRun != nil {
+						nextStr = j.NextRun.Format("01-02 15:04")
+					}
+					sb.WriteString(fmt.Sprintf("  %s  %s  [%s]  %s  下次: %s\n",
+						j.ID, j.Name, status, j.Schedule, nextStr))
+				}
+				sb.WriteString("\n通过对话管理：创建/修改/删除/暂停")
+				sess.AddMessage("assistant", sb.String())
+			}
+		}
 
 	case "/exit", "/quit":
 		sess.AddMessage("assistant", "再见!")

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/BlakeLiAFK/kele/internal/agent"
+	"github.com/BlakeLiAFK/kele/internal/cron"
 )
 
 // Session 独立的聊天会话
@@ -28,12 +29,12 @@ type Session struct {
 }
 
 // NewSession 创建新会话
-func NewSession(id int) *Session {
+func NewSession(id int, scheduler *cron.Scheduler) *Session {
 	return &Session{
 		id:         id,
 		name:       fmt.Sprintf("Chat %d", id),
 		messages:   []Message{},
-		brain:      agent.NewBrain(),
+		brain:      agent.NewBrain(scheduler),
 		historyIdx: -1,
 	}
 }
