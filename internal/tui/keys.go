@@ -110,7 +110,7 @@ func (a *App) handleKeyMsg(keyMsg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 		a.suggestion = ""
 		return true, nil
 
-	// Tab: 接受补全
+	// Tab: 接受补全 / 无建议时强制触发 AI 补全
 	case keyMsg.Type == tea.KeyTab:
 		if sess.streaming {
 			return true, nil
@@ -120,9 +120,11 @@ func (a *App) handleKeyMsg(keyMsg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 			a.textarea.CursorEnd()
 			a.suggestion = ""
 			a.completionHint = ""
+			a.completionState = ""
 			return true, nil
 		}
-		return true, nil
+		// 无建议时强制触发 AI 补全
+		return true, a.forceComplete()
 
 	// Ctrl+J: 换行
 	case keyMsg.Type == tea.KeyCtrlJ:

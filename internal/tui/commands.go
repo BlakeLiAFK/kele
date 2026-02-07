@@ -23,7 +23,7 @@ func (a *App) handleCommand(cmd string) {
 		sess.AddMessage("assistant", `Kele 命令帮助
 
 快捷键
-  Tab              智能补全
+  Tab              智能补全（无建议时强制触发）
   Enter            发送消息
   Ctrl+J           换行（多行输入）
   Up/Down          浏览输入历史

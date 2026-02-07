@@ -150,7 +150,10 @@ func tick() tea.Cmd {
 
 // shouldTick 是否需要继续 tick（有动画需要更新）
 func (a *App) shouldTick() bool {
-	return a.currentSession().streaming || a.completionState == "loading"
+	sess := a.currentSession()
+	// thinking 阶段才需要动画（content 开始后不再需要）
+	thinkingPhase := sess.streaming && sess.streamBuffer == ""
+	return thinkingPhase || a.completionState == "loading"
 }
 
 // Init 初始化
@@ -548,6 +551,33 @@ func (a *App) onInputChanged(input string) tea.Cmd {
 		}
 	}
 
+	return nil
+}
+
+// forceComplete Tab 强制触发 AI 补全（无防抖，覆盖之前的请求）
+func (a *App) forceComplete() tea.Cmd {
+	input := strings.TrimSpace(a.textarea.Value())
+	if input == "" || strings.HasPrefix(input, "/") {
+		return nil
+	}
+
+	sess := a.currentSession()
+	history := sess.brain.GetHistory()
+	var recent []llm.Message
+	if len(history) > 4 {
+		recent = history[len(history)-4:]
+	} else {
+		recent = history
+	}
+
+	a.completionState = "loading"
+	a.aiPending = true
+	cmd := a.completion.ForceComplete(input, recent)
+	if cmd != nil {
+		return tea.Batch(cmd, tick())
+	}
+	a.completionState = ""
+	a.aiPending = false
 	return nil
 }
 

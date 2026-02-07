@@ -137,7 +137,7 @@ func (e *CompletionEngine) AIComplete(input string, history []llm.Message) tea.C
 		e.mu.Lock()
 		if e.lastInput != input {
 			e.mu.Unlock()
-			return nil
+			return completionMsg{input: input} // 取消也要返回消息，清理 loading 状态
 		}
 		e.mu.Unlock()
 
@@ -158,13 +158,55 @@ func (e *CompletionEngine) AIComplete(input string, history []llm.Message) tea.C
 
 		// 结果与输入相同则无意义
 		if strings.TrimSpace(result) == strings.TrimSpace(input) {
-			return nil
+			return completionMsg{input: input}
 		}
 
 		// 缓存
 		e.mu.Lock()
 		e.cache[input] = result
 		// 缓存上限
+		if len(e.cache) > 100 {
+			e.cache = make(map[string]string)
+		}
+		e.mu.Unlock()
+
+		return completionMsg{input: input, suggestion: result}
+	}
+}
+
+// ForceComplete 强制 AI 补全（无防抖、无最小长度限制）
+func (e *CompletionEngine) ForceComplete(input string, history []llm.Message) tea.Cmd {
+	if input == "" || strings.HasPrefix(input, "/") {
+		return nil
+	}
+
+	e.mu.Lock()
+	e.lastInput = input
+	if cached, ok := e.cache[input]; ok {
+		e.mu.Unlock()
+		return func() tea.Msg {
+			return completionMsg{input: input, suggestion: cached}
+		}
+	}
+	e.mu.Unlock()
+
+	return func() tea.Msg {
+		result, err := e.brain.Complete(input, history)
+		if err != nil {
+			return completionMsg{input: input, err: err}
+		}
+		if result == "" {
+			return completionMsg{input: input}
+		}
+		if !strings.HasPrefix(result, input) {
+			result = input + result
+		}
+		if strings.TrimSpace(result) == strings.TrimSpace(input) {
+			return completionMsg{input: input}
+		}
+
+		e.mu.Lock()
+		e.cache[input] = result
 		if len(e.cache) > 100 {
 			e.cache = make(map[string]string)
 		}

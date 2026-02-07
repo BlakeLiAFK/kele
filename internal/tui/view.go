@@ -60,9 +60,10 @@ func renderAIBubble(msg Message, thinkingExpanded bool, spinnerFrame int, maxBub
 	label := aiLabelStyle.Render("Kele")
 	parts = append(parts, fmt.Sprintf("  %s", label))
 
-	// 渲染 Thinking 块
-	if msg.Thinking != "" || (msg.IsStream && msg.Content == "") {
-		thinkingBlock := renderThinkingBlock(msg.Thinking, msg.IsStream, thinkingExpanded, spinnerFrame, maxBubble)
+	// 渲染 Thinking 块（content 开始后 thinking 动画停止）
+	thinkingActive := msg.IsStream && msg.Content == ""
+	if msg.Thinking != "" || thinkingActive {
+		thinkingBlock := renderThinkingBlock(msg.Thinking, thinkingActive, thinkingExpanded, spinnerFrame, maxBubble)
 		parts = append(parts, thinkingBlock)
 	}
 

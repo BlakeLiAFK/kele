@@ -3,12 +3,14 @@ package llm
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 // Client LLM 客户端
@@ -100,7 +102,11 @@ func (c *Client) Complete(messages []Message, maxTokens int) (string, error) {
 		return "", err
 	}
 
-	httpReq, err := http.NewRequest("POST", c.apiBase+"/chat/completions", bytes.NewReader(body))
+	// 补全请求设置 8 秒超时，避免长时间挂起
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.apiBase+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return "", err
 	}

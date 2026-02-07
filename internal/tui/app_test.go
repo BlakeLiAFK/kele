@@ -597,3 +597,97 @@ func TestStreamMsgThinking(t *testing.T) {
 		t.Error("done 后 streaming 应为 false")
 	}
 }
+
+// TestThinkingAnimationStops 测试 content 开始后 thinking 动画停止
+func TestThinkingAnimationStops(t *testing.T) {
+	// 流式中只有 thinking（无 content）→ thinkingActive=true → 显示 spinner
+	msg := Message{Role: "assistant", Thinking: "analyzing...", Content: "", IsStream: true}
+	rendered := renderMessages([]Message{msg}, 80, false, 3)
+	if !strings.Contains(rendered, spinnerFrames[3]) {
+		t.Error("thinking 阶段应显示 spinner 动画")
+	}
+
+	// 流式中 thinking+content → thinkingActive=false → 不显示 spinner
+	msg.Content = "the answer is"
+	rendered = renderMessages([]Message{msg}, 80, false, 3)
+	// 折叠的 thinking 不应有 spinner
+	if strings.Contains(rendered, spinnerFrames[3]) {
+		t.Error("content 开始后 thinking 块不应显示 spinner")
+	}
+	if !strings.Contains(rendered, "Thinking") {
+		t.Error("content 开始后仍应显示 Thinking 标签（折叠）")
+	}
+}
+
+// TestTabForceCompletion 测试 Tab 强制触发补全
+func TestTabForceCompletion(t *testing.T) {
+	app := NewApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	app = model.(*App)
+
+	// 输入普通文本（不是 / 或 @）
+	for _, r := range "hello world" {
+		keyMsg := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}}
+		model, _ = app.Update(keyMsg)
+		app = model.(*App)
+	}
+
+	// 确认无 suggestion
+	if app.suggestion != "" {
+		t.Skipf("已有 suggestion %q, 跳过强制补全测试", app.suggestion)
+	}
+
+	// Tab 应触发强制补全（返回 cmd 不为 nil）
+	// 注意：实际 API 调用需要 key，这里只验证状态变化
+	tabMsg := tea.KeyMsg{Type: tea.KeyTab}
+	model, cmd := app.Update(tabMsg)
+	app = model.(*App)
+
+	// forceComplete 应设置 loading 状态
+	if app.completionState != "loading" {
+		t.Errorf("Tab 强制补全后状态应为 'loading', 实际 %q", app.completionState)
+	}
+	if cmd == nil {
+		t.Error("Tab 强制补全应返回非 nil cmd")
+	}
+}
+
+// TestShouldTickPrecision 测试 ticker 精确性
+func TestShouldTickPrecision(t *testing.T) {
+	app := NewApp()
+	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	app = model.(*App)
+
+	// 初始状态不需要 tick
+	if app.shouldTick() {
+		t.Error("初始状态不应需要 tick")
+	}
+
+	// streaming 但无 content（thinking 阶段）→ 需要 tick
+	sess := app.currentSession()
+	sess.streaming = true
+	sess.streamBuffer = ""
+	if !app.shouldTick() {
+		t.Error("thinking 阶段应需要 tick")
+	}
+
+	// streaming 且有 content → 不需要 tick
+	sess.streamBuffer = "some content"
+	if app.shouldTick() {
+		t.Error("content 阶段不应需要 tick")
+	}
+
+	// completionState=loading → 需要 tick
+	sess.streaming = false
+	sess.streamBuffer = ""
+	app.completionState = "loading"
+	if !app.shouldTick() {
+		t.Error("补全加载中应需要 tick")
+	}
+
+	// completionState=done → 不需要 tick
+	app.completionState = "done"
+	if app.shouldTick() {
+		t.Error("补全完成不应需要 tick")
+	}
+}
