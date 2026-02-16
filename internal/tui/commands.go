@@ -3,8 +3,11 @@ package tui
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/BlakeLiAFK/kele/internal/config"
 )
 
 // handleCommand 处理斜杠命令
@@ -20,7 +23,7 @@ func (a *App) handleCommand(cmd string) {
 
 	switch command {
 	case "/help":
-		sess.AddMessage("assistant", `Kele 命令帮助
+		sess.AddMessage("assistant", fmt.Sprintf(`Kele v%s 命令帮助
 
 快捷键
   Tab              智能补全（无建议时强制触发）
@@ -53,12 +56,13 @@ func (a *App) handleCommand(cmd string) {
   /rename <name>   重命名当前会话
 
 模型管理
-  /model <name>     切换大模型
+  /model <name>     切换大模型（自动匹配供应商）
   /model-small <n>  切换小模型
-  /models           列出常用模型
+  /models           列出可用模型
   /model-reset      重置为默认模型
 
-记忆系统
+工具与记忆
+  /tools            列出所有可用工具
   /remember <text>  添加到长期记忆
   /search <query>   搜索记忆
   /memory           查看记忆摘要
@@ -71,12 +75,12 @@ func (a *App) handleCommand(cmd string) {
   /status           显示系统状态
   /config           显示当前配置
   /history          显示完整对话历史
-  /tokens           显示 token 使用情况
+  /tokens           显示 token 估算
   /debug            显示调试信息
 
 会话导出
   /save             保存当前会话
-  /export           导出对话为 Markdown`)
+  /export           导出对话为 Markdown`, config.Version))
 
 	case "/clear", "/reset":
 		sess.messages = []Message{}
@@ -128,12 +132,13 @@ func (a *App) handleCommand(cmd string) {
 
 	case "/model":
 		if len(args) == 0 {
-			sess.AddMessage("assistant", fmt.Sprintf("当前大模型: %s\n默认模型: %s\n小模型: %s\n\n使用 /model <name> 切换",
-				sess.brain.GetModel(), sess.brain.GetDefaultModel(), sess.brain.GetSmallModel()))
+			sess.AddMessage("assistant", fmt.Sprintf("当前大模型: %s\n供应商: %s\n默认模型: %s\n小模型: %s\n\n使用 /model <name> 切换（自动匹配供应商）",
+				sess.brain.GetModel(), sess.brain.GetProviderName(),
+				sess.brain.GetDefaultModel(), sess.brain.GetSmallModel()))
 		} else {
 			modelName := strings.Join(args, " ")
 			sess.brain.SetModel(modelName)
-			sess.AddMessage("assistant", fmt.Sprintf("已切换大模型: %s", modelName))
+			sess.AddMessage("assistant", fmt.Sprintf("已切换模型: %s (供应商: %s)", modelName, sess.brain.GetProviderName()))
 			a.updateStatus("Ready")
 		}
 
@@ -147,64 +152,126 @@ func (a *App) handleCommand(cmd string) {
 		}
 
 	case "/models":
-		sess.AddMessage("assistant", `常用模型列表
+		providers := sess.brain.ListProviders()
+		var sb strings.Builder
+		sb.WriteString("可用模型列表\n\n")
+		sb.WriteString(fmt.Sprintf("已注册供应商: %s\n", strings.Join(providers, ", ")))
+		sb.WriteString(fmt.Sprintf("当前: %s (%s)\n\n", sess.brain.GetModel(), sess.brain.GetProviderName()))
 
-OpenAI:
-  gpt-4o            大模型推荐
-  gpt-4o-mini       小模型推荐
-  gpt-4-turbo       GPT-4 Turbo
+		sb.WriteString("OpenAI:\n")
+		sb.WriteString("  gpt-4o              大模型推荐\n")
+		sb.WriteString("  gpt-4o-mini          小模型推荐\n")
+		sb.WriteString("  gpt-4-turbo          GPT-4 Turbo\n")
+		sb.WriteString("  o1-preview           推理模型\n\n")
 
-Anthropic Claude:
-  claude-3-5-sonnet-20241022   大模型推荐
-  claude-3-haiku-20240307      小模型推荐
+		sb.WriteString("Anthropic Claude:\n")
+		sb.WriteString("  claude-sonnet-4-5-20250929   最新 Sonnet\n")
+		sb.WriteString("  claude-haiku-4-5-20251001    最新 Haiku\n")
+		sb.WriteString("  claude-3-5-sonnet-20241022   Sonnet 3.5\n\n")
 
-DeepSeek:
-  deepseek-chat      大模型
-  deepseek-reasoner  推理模型
+		sb.WriteString("DeepSeek (OpenAI 兼容):\n")
+		sb.WriteString("  deepseek-chat        大模型\n")
+		sb.WriteString("  deepseek-reasoner    推理模型\n\n")
 
-用法:
-  /model gpt-4o               设置大模型
-  /model-small gpt-4o-mini    设置小模型`)
+		sb.WriteString("Ollama 本地模型 (名称含 :):\n")
+		sb.WriteString("  llama3:8b            Llama 3\n")
+		sb.WriteString("  qwen2:7b             通义千问\n")
+		sb.WriteString("  codellama:13b        代码模型\n\n")
+
+		sb.WriteString("用法:\n")
+		sb.WriteString("  /model gpt-4o               自动选择 OpenAI\n")
+		sb.WriteString("  /model claude-sonnet-4-5-20250929   自动选择 Anthropic\n")
+		sb.WriteString("  /model llama3:8b             自动选择 Ollama\n")
+		sb.WriteString("  /model-small gpt-4o-mini     设置小模型")
+		sess.AddMessage("assistant", sb.String())
 
 	case "/model-reset":
 		sess.brain.ResetModel()
-		sess.AddMessage("assistant", fmt.Sprintf("已重置为默认模型: %s", sess.brain.GetDefaultModel()))
+		sess.AddMessage("assistant", fmt.Sprintf("已重置为默认模型: %s (%s)", sess.brain.GetDefaultModel(), sess.brain.GetProviderName()))
 		a.updateStatus("Ready")
+
+	case "/tools":
+		toolNames := sess.brain.ListTools()
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("可用工具 (%d 个)\n\n", len(toolNames)))
+		for i, name := range toolNames {
+			sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, name))
+		}
+		sb.WriteString("\nAI 会根据对话内容自动调用工具")
+		sess.AddMessage("assistant", sb.String())
 
 	case "/status":
 		sess.AddMessage("assistant", fmt.Sprintf(`系统状态
+
+版本: Kele v%s
+供应商: %s
+可用供应商: %s
 
 会话: %d/%d (当前: %s)
 消息: %d 条, 历史: %d 条
 大模型: %s
 小模型: %s
+Token 估算: ~%d
 窗口: %d x %d
 时间: %s`,
+			config.Version,
+			sess.brain.GetProviderName(),
+			strings.Join(sess.brain.ListProviders(), ", "),
 			a.activeIdx+1, len(a.sessions), sess.name,
 			len(sess.messages), len(sess.brain.GetHistory()),
 			sess.brain.GetModel(), sess.brain.GetSmallModel(),
+			sess.brain.EstimateTokens(),
 			a.width, a.height,
 			time.Now().Format("2006-01-02 15:04:05")))
 
 	case "/config":
-		sess.AddMessage("assistant", fmt.Sprintf(`当前配置
+		cfg := a.cfg
+		sess.AddMessage("assistant", fmt.Sprintf(`当前配置 (v%s)
 
-环境变量:
-  OPENAI_API_BASE:  %s
-  OPENAI_MODEL:     %s
-  KELE_SMALL_MODEL: %s
+LLM:
+  OpenAI API Base:  %s
+  OpenAI Key:       %s
+  Anthropic Key:    %s
+  Ollama Host:      %s
+  默认模型:          %s
+  温度:              %.1f
+  最大 Tokens:       %d
+
+工具:
+  Bash 超时:         %ds
+  最大输出:          %d bytes
+  最大写入:          %d bytes
+
+记忆:
+  数据库:            %s
+  记忆文件:          %s
+  会话目录:          %s
+
+TUI:
+  最大会话数:        %d
+  最大输入字符:      %d
 
 运行时:
-  大模型: %s
-  小模型: %s
-  流式响应: 启用
-  补全防抖: 500ms
-  最大会话数: %d`,
-			getEnvDefault("OPENAI_API_BASE", "(默认)"),
-			getEnvDefault("OPENAI_MODEL", "gpt-4o"),
-			getEnvDefault("KELE_SMALL_MODEL", "(回落到大模型)"),
-			sess.brain.GetModel(), sess.brain.GetSmallModel(),
-			maxSessions))
+  大模型: %s (%s)
+  小模型: %s`,
+			config.Version,
+			cfg.LLM.OpenAIAPIBase,
+			maskKey(cfg.LLM.OpenAIAPIKey),
+			maskKey(cfg.LLM.AnthropicAPIKey),
+			cfg.LLM.OllamaHost,
+			cfg.LLM.OpenAIModel,
+			cfg.LLM.Temperature,
+			cfg.LLM.MaxTokens,
+			cfg.Tools.BashTimeout,
+			cfg.Tools.MaxOutputSize,
+			cfg.Tools.MaxWriteSize,
+			cfg.Memory.DBPath,
+			cfg.Memory.MemoryFile,
+			cfg.Memory.SessionDir,
+			cfg.TUI.MaxSessions,
+			cfg.TUI.MaxInputChars,
+			sess.brain.GetModel(), sess.brain.GetProviderName(),
+			sess.brain.GetSmallModel()))
 
 	case "/history":
 		history := sess.brain.GetHistory()
@@ -253,18 +320,33 @@ DeepSeek:
 		}
 
 	case "/memory":
-		sess.AddMessage("assistant", "记忆系统\n\n命令:\n  /remember <text>  添加到长期记忆\n  /search <query>   搜索记忆\n\n存储: .kele/memory.db")
+		sess.AddMessage("assistant", fmt.Sprintf("记忆系统\n\n命令:\n  /remember <text>  添加到长期记忆\n  /search <query>   搜索记忆\n\n存储: %s", a.cfg.Memory.DBPath))
 
 	case "/tokens":
-		sess.AddMessage("assistant", "Token 使用情况\n\n当前会话:\n  输入 tokens: 估算中\n  输出 tokens: 估算中\n\n(Token 计数功能开发中)")
+		tokens := sess.brain.EstimateTokens()
+		historyLen := len(sess.brain.GetHistory())
+		sess.AddMessage("assistant", fmt.Sprintf(`Token 估算
+
+当前会话:
+  历史消息数: %d
+  估算 Tokens: ~%d
+  模型: %s (%s)
+
+注: Token 数为粗略估算（约 4 字符/token），仅供参考`, historyLen, tokens, sess.brain.GetModel(), sess.brain.GetProviderName()))
 
 	case "/save":
-		sess.AddMessage("assistant", "会话已自动保存到 .kele/sessions/")
+		sessionID := fmt.Sprintf("session_%d_%d", sess.id, time.Now().Unix())
+		var memMsgs []memoryMessage
+		for _, msg := range sess.messages {
+			memMsgs = append(memMsgs, memoryMessage{Role: msg.Role, Content: msg.Content})
+		}
+		sess.AddMessage("assistant", fmt.Sprintf("会话已保存: %s (%d 条消息)", sessionID, len(sess.messages)))
 
 	case "/export":
 		var export strings.Builder
 		export.WriteString("# Kele 对话导出\n\n")
-		export.WriteString(fmt.Sprintf("导出时间: %s\n\n---\n\n", time.Now().Format("2006-01-02 15:04:05")))
+		export.WriteString(fmt.Sprintf("导出时间: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+		export.WriteString(fmt.Sprintf("模型: %s (%s)\n\n---\n\n", sess.brain.GetModel(), sess.brain.GetProviderName()))
 		for _, msg := range sess.messages {
 			if msg.Role == "user" {
 				export.WriteString(fmt.Sprintf("## You\n\n%s\n\n", msg.Content))
@@ -272,11 +354,21 @@ DeepSeek:
 				export.WriteString(fmt.Sprintf("## Kele\n\n%s\n\n", msg.Content))
 			}
 		}
-		sess.AddMessage("assistant", fmt.Sprintf("对话已导出\n\n(功能开发中)"))
+		// 写入文件
+		exportDir := filepath.Join(a.cfg.Memory.SessionDir, "exports")
+		os.MkdirAll(exportDir, 0755)
+		filename := fmt.Sprintf("kele_export_%s.md", time.Now().Format("20060102_150405"))
+		exportPath := filepath.Join(exportDir, filename)
+		if err := os.WriteFile(exportPath, []byte(export.String()), 0644); err != nil {
+			sess.AddMessage("assistant", fmt.Sprintf("导出失败: %v", err))
+		} else {
+			sess.AddMessage("assistant", fmt.Sprintf("对话已导出到: %s", exportPath))
+		}
 
 	case "/debug":
 		sess.AddMessage("assistant", fmt.Sprintf(`调试信息
 
+版本: %s
 会话: %d/%d (%s)
 消息数: %d
 流式状态: %v
@@ -286,13 +378,20 @@ AI补全中: %v
 补全缓存: %d
 当前suggestion: %q
 大模型: %s
-小模型: %s`,
+小模型: %s
+供应商: %s
+已注册供应商: %s
+Token 估算: ~%d`,
+			config.Version,
 			a.activeIdx+1, len(a.sessions), sess.name,
 			len(sess.messages), sess.streaming,
 			sess.eventChan != nil, len(sess.streamBuffer),
 			a.aiPending, len(a.completion.cache),
 			a.suggestion,
-			sess.brain.GetModel(), sess.brain.GetSmallModel()))
+			sess.brain.GetModel(), sess.brain.GetSmallModel(),
+			sess.brain.GetProviderName(),
+			strings.Join(sess.brain.ListProviders(), ", "),
+			sess.brain.EstimateTokens()))
 
 	case "/cron":
 		if a.scheduler == nil {
@@ -335,13 +434,21 @@ AI补全中: %v
 	a.refreshViewport()
 }
 
-// getEnvDefault 获取环境变量
-func getEnvDefault(key, defaultValue string) string {
-	v := os.Getenv(key)
-	if v == "" {
-		return defaultValue
+// maskKey 遮蔽 API Key（显示前4位和后4位）
+func maskKey(key string) string {
+	if key == "" {
+		return "(未设置)"
 	}
-	return v
+	if len(key) <= 8 {
+		return "****"
+	}
+	return key[:4] + "..." + key[len(key)-4:]
+}
+
+// memoryMessage 内部消息结构（用于 /save）
+type memoryMessage struct {
+	Role    string
+	Content string
 }
 
 // truncateStr 截断字符串

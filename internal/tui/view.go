@@ -249,7 +249,7 @@ func renderOverlay(a *App, width, height int) string {
 	title := overlayTitleStyle.Width(width).Render("  Kele Settings  (Ctrl+O to close)")
 
 	var content strings.Builder
-	content.WriteString(fmt.Sprintf("  Sessions (%d/%d)\n\n", len(a.sessions), maxSessions))
+	content.WriteString(fmt.Sprintf("  Sessions (%d/%d)\n\n", len(a.sessions), a.cfg.TUI.MaxSessions))
 	for i, s := range a.sessions {
 		marker := "  "
 		if i == a.activeIdx {
@@ -258,7 +258,8 @@ func renderOverlay(a *App, width, height int) string {
 		content.WriteString(fmt.Sprintf("  %s%d: %s (%d msgs)\n", marker, i+1, s.name, len(s.messages)))
 	}
 
-	content.WriteString(fmt.Sprintf("\n  Model: %s\n", sess.brain.GetModel()))
+	content.WriteString(fmt.Sprintf("\n  Provider: %s\n", sess.brain.GetProviderName()))
+	content.WriteString(fmt.Sprintf("  Model: %s\n", sess.brain.GetModel()))
 	content.WriteString(fmt.Sprintf("  Small Model: %s\n", sess.brain.GetSmallModel()))
 	content.WriteString(fmt.Sprintf("\n  Keybindings:\n"))
 	content.WriteString("    Ctrl+Right  Next session\n")

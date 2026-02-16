@@ -2,7 +2,7 @@ module github.com/BlakeLiAFK/kele
 
 replace github.com/BlakeLiAFK/kele => ./
 
-go 1.25.3
+go 1.24.7
 
 require (
 	github.com/charmbracelet/bubbles v0.21.1
