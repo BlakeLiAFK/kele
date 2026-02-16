@@ -5,11 +5,17 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/BlakeLiAFK/kele/internal/config"
 )
+
+// testConfig 创建测试用配置
+func testConfig() *config.Config {
+	return config.Load()
+}
 
 // TestCompletionIntegration 测试补全触发的完整流程
 func TestCompletionIntegration(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
@@ -75,7 +81,7 @@ func TestCompletionIntegration(t *testing.T) {
 
 // TestViewLayout 测试布局行数
 func TestViewLayout(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -107,7 +113,7 @@ func TestViewLayout(t *testing.T) {
 
 // TestMultiSession 测试多会话管理
 func TestMultiSession(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -184,7 +190,7 @@ func TestMultiSession(t *testing.T) {
 
 // TestSessionTextareaPersistence 测试会话切换时输入框内容持久化
 func TestSessionTextareaPersistence(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -246,7 +252,7 @@ func TestSessionTextareaPersistence(t *testing.T) {
 
 // TestSessionIDUniqueness 测试会话 ID 唯一性（关闭后新建不重复）
 func TestSessionIDUniqueness(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -279,7 +285,7 @@ func TestSessionIDUniqueness(t *testing.T) {
 
 // TestDoubleCtrlC 测试双击 Ctrl+C 退出
 func TestDoubleCtrlC(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -302,7 +308,7 @@ func TestDoubleCtrlC(t *testing.T) {
 
 // TestInputHistory 测试输入历史
 func TestInputHistory(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -338,7 +344,7 @@ func TestInputHistory(t *testing.T) {
 
 // TestCtrlJ 测试 Ctrl+J 换行
 func TestCtrlJ(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -385,7 +391,7 @@ func TestBubbleRendering(t *testing.T) {
 
 // TestCtrlO 测试 Ctrl+O 设置面板
 func TestCtrlO(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -462,7 +468,7 @@ func TestThinkingBlockRendering(t *testing.T) {
 
 // TestCtrlE 测试 Ctrl+E 切换 Thinking 展开/折叠
 func TestCtrlE(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -491,7 +497,7 @@ func TestCtrlE(t *testing.T) {
 
 // TestCompletionState 测试补全状态追踪
 func TestCompletionState(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -547,7 +553,7 @@ func TestCompletionStatusRendering(t *testing.T) {
 
 // TestStreamMsgThinking 测试流式消息中的 thinking 处理
 func TestStreamMsgThinking(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -621,7 +627,7 @@ func TestThinkingAnimationStops(t *testing.T) {
 
 // TestTabForceCompletion 测试 Tab 强制触发补全
 func TestTabForceCompletion(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 
@@ -654,7 +660,7 @@ func TestTabForceCompletion(t *testing.T) {
 
 // TestShouldTickPrecision 测试 ticker 精确性
 func TestShouldTickPrecision(t *testing.T) {
-	app := NewApp()
+	app := NewApp(testConfig())
 	model, _ := app.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	app = model.(*App)
 

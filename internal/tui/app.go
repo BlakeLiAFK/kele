@@ -12,19 +12,17 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/BlakeLiAFK/kele/internal/config"
 	"github.com/BlakeLiAFK/kele/internal/cron"
 	"github.com/BlakeLiAFK/kele/internal/llm"
 )
-
-// 最大会话数
-const maxSessions = 9
 
 // allCommands 所有可用命令
 var allCommands = []string{
 	"/help", "/clear", "/reset", "/exit", "/quit",
 	"/model", "/models", "/model-reset", "/model-small",
 	"/remember", "/search", "/memory",
-	"/status", "/config", "/history", "/tokens",
+	"/status", "/config", "/history", "/tokens", "/tools",
 	"/save", "/export", "/debug",
 	"/new", "/sessions", "/switch", "/rename",
 	"/cron",
@@ -40,6 +38,9 @@ type Message struct {
 
 // App 主应用
 type App struct {
+	// 全局配置
+	cfg *config.Config
+
 	// 全局调度器
 	scheduler *cron.Scheduler
 
@@ -110,23 +111,24 @@ type tickMsg struct{}
 var spinnerFrames = []string{"\u28cb", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"}
 
 // NewApp 创建应用
-func NewApp() *App {
+func NewApp(cfg *config.Config) *App {
 	ta := textarea.New()
 	ta.Placeholder = "输入消息... (Tab 补全, Ctrl+J 换行)"
 	ta.Focus()
-	ta.CharLimit = 5000
+	ta.CharLimit = cfg.TUI.MaxInputChars
 	ta.SetHeight(3)
 	ta.ShowLineNumbers = false
 
 	// 创建全局调度器
 	wd, _ := os.Getwd()
-	scheduler := cron.NewScheduler(".kele/memory.db", wd)
+	scheduler := cron.NewScheduler(cfg.Memory.DBPath, wd)
 	scheduler.Start()
 
 	// 创建第一个会话
-	firstSession := NewSession(1, scheduler)
+	firstSession := NewSession(1, scheduler, cfg)
 
 	app := &App{
+		cfg:           cfg,
 		scheduler:     scheduler,
 		sessions:      []*Session{firstSession},
 		activeIdx:     0,
@@ -627,14 +629,14 @@ func (a *App) handleCompletionMsg(msg completionMsg) tea.Cmd {
 
 // createSession 创建新会话
 func (a *App) createSession(name string) {
-	if len(a.sessions) >= maxSessions {
-		a.currentSession().AddMessage("assistant", fmt.Sprintf("已达最大会话数 %d", maxSessions))
+	if len(a.sessions) >= a.cfg.TUI.MaxSessions {
+		a.currentSession().AddMessage("assistant", fmt.Sprintf("已达最大会话数 %d", a.cfg.TUI.MaxSessions))
 		a.refreshViewport()
 		return
 	}
 	id := a.nextSessionID
 	a.nextSessionID++
-	s := NewSession(id, a.scheduler)
+	s := NewSession(id, a.scheduler, a.cfg)
 	if name != "" {
 		s.name = name
 	}
@@ -700,5 +702,6 @@ func (a *App) refreshViewport() {
 // updateStatus 更新状态栏
 func (a *App) updateStatus(status string) {
 	sess := a.currentSession()
-	a.statusContent = fmt.Sprintf("Kele | %s | %s", sess.brain.GetModel(), status)
+	a.statusContent = fmt.Sprintf("Kele v%s | %s (%s) | %s",
+		config.Version, sess.brain.GetModel(), sess.brain.GetProviderName(), status)
 }

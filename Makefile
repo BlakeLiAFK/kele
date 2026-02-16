@@ -1,4 +1,4 @@
-.PHONY: build run clean install deps test
+.PHONY: build run clean install deps test vet
 
 # 构建
 build:
@@ -13,7 +13,7 @@ deps:
 	go get github.com/charmbracelet/bubbletea
 	go get github.com/charmbracelet/bubbles
 	go get github.com/charmbracelet/lipgloss
-	go get github.com/charmbracelet/glamour
+	go get github.com/mattn/go-sqlite3
 	go mod tidy
 
 # 清理
@@ -24,6 +24,10 @@ clean:
 # 测试
 test:
 	go test -v ./...
+
+# 静态检查
+vet:
+	go vet ./...
 
 # 安装到系统
 install: build
@@ -36,6 +40,10 @@ fmt:
 # 代码检查
 lint:
 	golangci-lint run ./...
+
+# 版本
+version:
+	@go run ./cmd/kele --version
 
 # 快速开始
 quickstart: deps run

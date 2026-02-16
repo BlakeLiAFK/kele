@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BlakeLiAFK/kele/internal/config"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -16,15 +17,17 @@ import (
 type Store struct {
 	db         *sql.DB
 	memoryFile string
+	sessionDir string
 }
 
 // NewStore 创建存储
-func NewStore() *Store {
-	dbPath := ".kele/memory.db"
-	memoryFile := ".kele/MEMORY.md"
+func NewStore(cfg *config.Config) *Store {
+	dbPath := cfg.Memory.DBPath
+	memoryFile := cfg.Memory.MemoryFile
+	sessionDir := cfg.Memory.SessionDir
 
-	// 确保目录存在
-	os.MkdirAll(".kele/sessions", 0755)
+	os.MkdirAll(filepath.Dir(dbPath), 0755)
+	os.MkdirAll(sessionDir, 0755)
 
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
@@ -34,13 +37,12 @@ func NewStore() *Store {
 	store := &Store{
 		db:         db,
 		memoryFile: memoryFile,
+		sessionDir: sessionDir,
 	}
-
 	store.initSchema()
 	return store
 }
 
-// initSchema 初始化数据库结构
 func (s *Store) initSchema() {
 	schema := `
 	CREATE TABLE IF NOT EXISTS messages (
@@ -58,28 +60,29 @@ func (s *Store) initSchema() {
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_memory_value ON memory_entries(value);
-	`
+	CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
 
+	CREATE TABLE IF NOT EXISTS sessions (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+		message_count INTEGER DEFAULT 0,
+		summary TEXT DEFAULT ''
+	);
+	`
 	if _, err := s.db.Exec(schema); err != nil {
 		panic(err)
 	}
 }
 
-// SaveMessage 保存消息
 func (s *Store) SaveMessage(role, content string) error {
-	_, err := s.db.Exec(
-		"INSERT INTO messages (role, content) VALUES (?, ?)",
-		role, content,
-	)
+	_, err := s.db.Exec("INSERT INTO messages (role, content) VALUES (?, ?)", role, content)
 	return err
 }
 
-// GetRecentMessages 获取最近的消息
 func (s *Store) GetRecentMessages(limit int) ([]Message, error) {
-	rows, err := s.db.Query(
-		"SELECT role, content, timestamp FROM messages ORDER BY id DESC LIMIT ?",
-		limit,
-	)
+	rows, err := s.db.Query("SELECT role, content, timestamp FROM messages ORDER BY id DESC LIMIT ?", limit)
 	if err != nil {
 		return nil, err
 	}
@@ -95,49 +98,51 @@ func (s *Store) GetRecentMessages(limit int) ([]Message, error) {
 		msg.Timestamp, _ = time.Parse("2006-01-02 15:04:05", timestamp)
 		messages = append(messages, msg)
 	}
-
-	// 反转顺序（最旧的在前）
 	for i := 0; i < len(messages)/2; i++ {
 		j := len(messages) - 1 - i
 		messages[i], messages[j] = messages[j], messages[i]
 	}
-
 	return messages, nil
 }
 
-// UpdateMemory 更新记忆条目
 func (s *Store) UpdateMemory(key, value string) error {
-	// 更新数据库
 	_, err := s.db.Exec(
-		`INSERT INTO memory_entries (key, value, updated_at)
-		 VALUES (?, ?, CURRENT_TIMESTAMP)
+		`INSERT INTO memory_entries (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)
 		 ON CONFLICT(key) DO UPDATE SET value=?, updated_at=CURRENT_TIMESTAMP`,
 		key, value, value,
 	)
 	if err != nil {
 		return err
 	}
-
-	// 同步到 MEMORY.md
 	return s.syncToFile()
 }
 
-// GetMemory 获取记忆条目
 func (s *Store) GetMemory(key string) (string, error) {
 	var value string
-	err := s.db.QueryRow(
-		"SELECT value FROM memory_entries WHERE key = ?",
-		key,
-	).Scan(&value)
+	err := s.db.QueryRow("SELECT value FROM memory_entries WHERE key = ?", key).Scan(&value)
 	return value, err
 }
 
-// Search 搜索记忆
+// Search 搜索记忆（支持多关键词）
 func (s *Store) Search(query string, limit int) ([]string, error) {
-	rows, err := s.db.Query(
-		"SELECT value FROM memory_entries WHERE value LIKE ? LIMIT ?",
-		"%"+query+"%", limit,
+	keywords := strings.Fields(query)
+	if len(keywords) == 0 {
+		return nil, nil
+	}
+
+	var conditions []string
+	var args []interface{}
+	for _, kw := range keywords {
+		conditions = append(conditions, "value LIKE ?")
+		args = append(args, "%"+kw+"%")
+	}
+	args = append(args, limit)
+
+	sqlStr := fmt.Sprintf(
+		"SELECT value FROM memory_entries WHERE %s ORDER BY updated_at DESC LIMIT ?",
+		strings.Join(conditions, " AND "),
 	)
+	rows, err := s.db.Query(sqlStr, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -152,14 +157,38 @@ func (s *Store) Search(query string, limit int) ([]string, error) {
 		results = append(results, content)
 	}
 
+	// 多关键词无结果时退化为 OR 搜索
+	if len(results) == 0 && len(keywords) > 1 {
+		var orConditions []string
+		var orArgs []interface{}
+		for _, kw := range keywords {
+			orConditions = append(orConditions, "value LIKE ?")
+			orArgs = append(orArgs, "%"+kw+"%")
+		}
+		orArgs = append(orArgs, limit)
+		orSQL := fmt.Sprintf(
+			"SELECT value FROM memory_entries WHERE %s ORDER BY updated_at DESC LIMIT ?",
+			strings.Join(orConditions, " OR "),
+		)
+		rows2, err := s.db.Query(orSQL, orArgs...)
+		if err != nil {
+			return nil, err
+		}
+		defer rows2.Close()
+		for rows2.Next() {
+			var content string
+			if err := rows2.Scan(&content); err != nil {
+				continue
+			}
+			results = append(results, content)
+		}
+	}
+
 	return results, nil
 }
 
-// syncToFile 同步到 MEMORY.md
 func (s *Store) syncToFile() error {
-	rows, err := s.db.Query(
-		"SELECT key, value, updated_at FROM memory_entries ORDER BY updated_at DESC",
-	)
+	rows, err := s.db.Query("SELECT key, value, updated_at FROM memory_entries ORDER BY updated_at DESC")
 	if err != nil {
 		return err
 	}
@@ -167,7 +196,6 @@ func (s *Store) syncToFile() error {
 
 	content := "# 长期记忆\n\n"
 	content += fmt.Sprintf("> 最后更新: %s\n\n", time.Now().Format("2006-01-02 15:04:05"))
-
 	for rows.Next() {
 		var key, value, updatedAt string
 		if err := rows.Scan(&key, &value, &updatedAt); err != nil {
@@ -176,14 +204,15 @@ func (s *Store) syncToFile() error {
 		content += fmt.Sprintf("## %s\n\n%s\n\n", key, value)
 	}
 
+	os.MkdirAll(filepath.Dir(s.memoryFile), 0755)
 	return os.WriteFile(s.memoryFile, []byte(content), 0644)
 }
 
-// SaveSession 保存会话
-func (s *Store) SaveSession(sessionID string, messages []Message) error {
-	sessionFile := filepath.Join(".kele/sessions", sessionID+".jsonl")
+// --- 会话持久化 ---
 
-	file, err := os.OpenFile(sessionFile, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+func (s *Store) SaveSession(sessionID string, messages []Message) error {
+	sessionFile := filepath.Join(s.sessionDir, sessionID+".jsonl")
+	file, err := os.Create(sessionFile)
 	if err != nil {
 		return err
 	}
@@ -198,21 +227,28 @@ func (s *Store) SaveSession(sessionID string, messages []Message) error {
 		file.Write([]byte("\n"))
 	}
 
+	summary := ""
+	if len(messages) > 0 {
+		summary = messages[0].Content
+		if len([]rune(summary)) > 50 {
+			summary = string([]rune(summary)[:50]) + "..."
+		}
+	}
+	s.db.Exec(`INSERT INTO sessions (id, name, updated_at, message_count, summary)
+		VALUES (?, ?, CURRENT_TIMESTAMP, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET updated_at=CURRENT_TIMESTAMP, message_count=?, summary=?`,
+		sessionID, sessionID, len(messages), summary, len(messages), summary)
 	return nil
 }
 
-// LoadSession 加载会话
 func (s *Store) LoadSession(sessionID string) ([]Message, error) {
-	sessionFile := filepath.Join(".kele/sessions", sessionID+".jsonl")
-
+	sessionFile := filepath.Join(s.sessionDir, sessionID+".jsonl")
 	data, err := os.ReadFile(sessionFile)
 	if err != nil {
 		return nil, err
 	}
-
 	var messages []Message
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
+	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if len(line) == 0 {
 			continue
@@ -223,18 +259,45 @@ func (s *Store) LoadSession(sessionID string) ([]Message, error) {
 		}
 		messages = append(messages, msg)
 	}
-
 	return messages, nil
 }
 
-// Close 关闭存储
-func (s *Store) Close() error {
-	return s.db.Close()
+func (s *Store) ListSessions() ([]SessionInfo, error) {
+	rows, err := s.db.Query("SELECT id, name, created_at, updated_at, message_count, summary FROM sessions ORDER BY updated_at DESC LIMIT 20")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []SessionInfo
+	for rows.Next() {
+		var si SessionInfo
+		var createdAt, updatedAt string
+		if err := rows.Scan(&si.ID, &si.Name, &createdAt, &updatedAt, &si.MessageCount, &si.Summary); err != nil {
+			continue
+		}
+		si.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
+		si.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+		sessions = append(sessions, si)
+	}
+	return sessions, nil
 }
+
+func (s *Store) Close() error { return s.db.Close() }
 
 // Message 消息结构
 type Message struct {
 	Role      string    `json:"role"`
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
+}
+
+// SessionInfo 会话信息
+type SessionInfo struct {
+	ID           string
+	Name         string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	MessageCount int
+	Summary      string
 }
