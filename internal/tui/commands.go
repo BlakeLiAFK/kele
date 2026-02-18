@@ -422,6 +422,55 @@ Token 估算: ~%d`,
 			}
 		}
 
+	case "/model-info":
+		info := sess.brain.GetProviderInfo()
+		var sb strings.Builder
+		sb.WriteString("模型详细信息\n\n")
+		sb.WriteString(fmt.Sprintf("  供应商:       %s\n", info["provider"]))
+		sb.WriteString(fmt.Sprintf("  当前模型:     %s\n", info["model"]))
+		sb.WriteString(fmt.Sprintf("  默认模型:     %s\n", info["defaultModel"]))
+		sb.WriteString(fmt.Sprintf("  小模型:       %s\n", info["smallModel"]))
+		sb.WriteString(fmt.Sprintf("  工具支持:     %s\n", info["supportsTools"]))
+		sb.WriteString(fmt.Sprintf("  已注册供应商: %s\n", strings.Join(sess.brain.ListProviders(), ", ")))
+		sess.AddMessage("assistant", sb.String())
+
+	case "/load":
+		if len(args) == 0 {
+			// 列出可加载的会话
+			memStore := sess.brain.GetMemoryStore()
+			if memStore == nil {
+				sess.AddMessage("assistant", "记忆系统未初始化，无法加载会话")
+			} else {
+				sessions, err := memStore.ListSessions()
+				if err != nil {
+					sess.AddMessage("assistant", fmt.Sprintf("查询会话失败: %v", err))
+				} else if len(sessions) == 0 {
+					sess.AddMessage("assistant", "暂无已保存的会话")
+				} else {
+					var sb strings.Builder
+					sb.WriteString(fmt.Sprintf("已保存的会话 (%d 个)\n\n", len(sessions)))
+					for i, si := range sessions {
+						sb.WriteString(fmt.Sprintf("  %d. %s (%d 条消息) - %s\n", i+1, si.ID, si.MessageCount, si.Summary))
+					}
+					sb.WriteString("\n用法: /load <session-id>")
+					sess.AddMessage("assistant", sb.String())
+				}
+			}
+		} else {
+			sessionID := args[0]
+			memStore := sess.brain.GetMemoryStore()
+			if memStore == nil {
+				sess.AddMessage("assistant", "记忆系统未初始化")
+			} else {
+				_, err := memStore.LoadSession(sessionID)
+				if err != nil {
+					sess.AddMessage("assistant", fmt.Sprintf("加载会话失败: %v", err))
+				} else {
+					sess.AddMessage("assistant", fmt.Sprintf("已加载会话: %s", sessionID))
+				}
+			}
+		}
+
 	case "/exit", "/quit":
 		sess.AddMessage("assistant", "再见!")
 		a.quitting = true

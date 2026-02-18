@@ -36,8 +36,8 @@ func TestLocalComplete_SlashCommand(t *testing.T) {
 		{
 			name:          "model 前缀匹配多个",
 			input:         "/model",
-			wantSuggCount: 4, // /model, /models, /model-reset, /model-small
-			wantCandCount: 4,
+			wantSuggCount: 5, // /model, /models, /model-reset, /model-small, /model-info
+			wantCandCount: 5,
 		},
 		{
 			name:          "唯一匹配",

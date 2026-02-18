@@ -18,10 +18,11 @@ type Store struct {
 	db         *sql.DB
 	memoryFile string
 	sessionDir string
+	hasFTS5    bool // FTS5 是否可用
 }
 
-// NewStore 创建存储
-func NewStore(cfg *config.Config) *Store {
+// NewStore 创建存储（返回 error 而非 panic）
+func NewStore(cfg *config.Config) (*Store, error) {
 	dbPath := cfg.Memory.DBPath
 	memoryFile := cfg.Memory.MemoryFile
 	sessionDir := cfg.Memory.SessionDir
@@ -31,7 +32,7 @@ func NewStore(cfg *config.Config) *Store {
 
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("打开数据库失败: %w", err)
 	}
 
 	store := &Store{
@@ -39,11 +40,14 @@ func NewStore(cfg *config.Config) *Store {
 		memoryFile: memoryFile,
 		sessionDir: sessionDir,
 	}
-	store.initSchema()
-	return store
+	if err := store.initSchema(); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("初始化数据库失败: %w", err)
+	}
+	return store, nil
 }
 
-func (s *Store) initSchema() {
+func (s *Store) initSchema() error {
 	schema := `
 	CREATE TABLE IF NOT EXISTS messages (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,8 +76,35 @@ func (s *Store) initSchema() {
 	);
 	`
 	if _, err := s.db.Exec(schema); err != nil {
-		panic(err)
+		return err
 	}
+
+	// 尝试创建 FTS5 虚拟表（如果 FTS5 不可用则跳过）
+	s.initFTS5()
+	return nil
+}
+
+// initFTS5 尝试初始化 FTS5 全文搜索
+func (s *Store) initFTS5() {
+	_, err := s.db.Exec(`
+		CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(
+			key, value,
+			tokenize='unicode61'
+		);
+	`)
+	if err != nil {
+		// FTS5 不可用，使用 LIKE 降级方案
+		s.hasFTS5 = false
+		return
+	}
+	s.hasFTS5 = true
+
+	// 同步已有数据到 FTS5 表（增量：只添加 FTS5 中不存在的）
+	s.db.Exec(`
+		INSERT OR IGNORE INTO memory_fts(rowid, key, value)
+		SELECT id, key, value FROM memory_entries
+		WHERE id NOT IN (SELECT rowid FROM memory_fts)
+	`)
 }
 
 func (s *Store) SaveMessage(role, content string) error {
@@ -114,6 +145,17 @@ func (s *Store) UpdateMemory(key, value string) error {
 	if err != nil {
 		return err
 	}
+
+	// 同步到 FTS5
+	if s.hasFTS5 {
+		// 获取新插入/更新行的 ID
+		var rowID int64
+		s.db.QueryRow("SELECT id FROM memory_entries WHERE key = ?", key).Scan(&rowID)
+		// 删除旧的 FTS5 条目，再插入新的
+		s.db.Exec("DELETE FROM memory_fts WHERE rowid = ?", rowID)
+		s.db.Exec("INSERT INTO memory_fts(rowid, key, value) VALUES (?, ?, ?)", rowID, key, value)
+	}
+
 	return s.syncToFile()
 }
 
@@ -123,13 +165,101 @@ func (s *Store) GetMemory(key string) (string, error) {
 	return value, err
 }
 
-// Search 搜索记忆（支持多关键词）
+// GetRecentMemories 获取最近的记忆条目（用于 system prompt 注入）
+func (s *Store) GetRecentMemories(limit int) ([]string, error) {
+	rows, err := s.db.Query(
+		"SELECT key, value FROM memory_entries ORDER BY updated_at DESC LIMIT ?", limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []string
+	for rows.Next() {
+		var key, value string
+		if err := rows.Scan(&key, &value); err != nil {
+			continue
+		}
+		entry := value
+		if len([]rune(entry)) > 200 {
+			entry = string([]rune(entry)[:200]) + "..."
+		}
+		results = append(results, fmt.Sprintf("[%s] %s", key, entry))
+	}
+	return results, nil
+}
+
+// Search 搜索记忆（优先使用 FTS5 BM25 排序，降级使用 LIKE）
 func (s *Store) Search(query string, limit int) ([]string, error) {
 	keywords := strings.Fields(query)
 	if len(keywords) == 0 {
 		return nil, nil
 	}
 
+	// 优先使用 FTS5 搜索
+	if s.hasFTS5 {
+		return s.searchFTS5(query, keywords, limit)
+	}
+	return s.searchLike(keywords, limit)
+}
+
+// searchFTS5 使用 FTS5 全文搜索（BM25 排序）
+func (s *Store) searchFTS5(query string, keywords []string, limit int) ([]string, error) {
+	// 构建 FTS5 查询表达式：多词用 AND 连接
+	ftsQuery := strings.Join(keywords, " AND ")
+
+	rows, err := s.db.Query(
+		`SELECT value, bm25(memory_fts) AS rank
+		 FROM memory_fts
+		 WHERE memory_fts MATCH ?
+		 ORDER BY rank
+		 LIMIT ?`,
+		ftsQuery, limit)
+	if err != nil {
+		// FTS5 查询失败，降级到 LIKE
+		return s.searchLike(keywords, limit)
+	}
+	defer rows.Close()
+
+	var results []string
+	for rows.Next() {
+		var content string
+		var rank float64
+		if err := rows.Scan(&content, &rank); err != nil {
+			continue
+		}
+		results = append(results, content)
+	}
+
+	// FTS5 无结果时尝试 OR 查询
+	if len(results) == 0 && len(keywords) > 1 {
+		orQuery := strings.Join(keywords, " OR ")
+		rows2, err := s.db.Query(
+			`SELECT value, bm25(memory_fts) AS rank
+			 FROM memory_fts
+			 WHERE memory_fts MATCH ?
+			 ORDER BY rank
+			 LIMIT ?`,
+			orQuery, limit)
+		if err != nil {
+			return s.searchLike(keywords, limit)
+		}
+		defer rows2.Close()
+		for rows2.Next() {
+			var content string
+			var rank float64
+			if err := rows2.Scan(&content, &rank); err != nil {
+				continue
+			}
+			results = append(results, content)
+		}
+	}
+
+	return results, nil
+}
+
+// searchLike LIKE 降级搜索
+func (s *Store) searchLike(keywords []string, limit int) ([]string, error) {
 	var conditions []string
 	var args []interface{}
 	for _, kw := range keywords {
@@ -185,6 +315,11 @@ func (s *Store) Search(query string, limit int) ([]string, error) {
 	}
 
 	return results, nil
+}
+
+// HasFTS5 返回 FTS5 是否可用
+func (s *Store) HasFTS5() bool {
+	return s.hasFTS5
 }
 
 func (s *Store) syncToFile() error {
@@ -281,6 +416,18 @@ func (s *Store) ListSessions() ([]SessionInfo, error) {
 		sessions = append(sessions, si)
 	}
 	return sessions, nil
+}
+
+// GetLatestSession 获取最近的会话（用于启动时自动恢复）
+func (s *Store) GetLatestSession() (*SessionInfo, error) {
+	sessions, err := s.ListSessions()
+	if err != nil {
+		return nil, err
+	}
+	if len(sessions) == 0 {
+		return nil, nil
+	}
+	return &sessions[0], nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }

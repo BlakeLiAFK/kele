@@ -115,10 +115,16 @@ func TestHasAnthropic(t *testing.T) {
 
 func TestApplyFlags(t *testing.T) {
 	cfg := Load()
-	cfg.ApplyFlags("custom-model", true)
+	cfg.ApplyFlags("custom-model", true, "/tmp/test.yaml")
 
 	if cfg.LLM.OpenAIModel != "custom-model" {
 		t.Errorf("ApplyFlags 应覆盖模型为 custom-model, 实际 %s", cfg.LLM.OpenAIModel)
+	}
+	if !cfg.Debug {
+		t.Error("ApplyFlags 应设置 Debug 为 true")
+	}
+	if cfg.ConfigPath != "/tmp/test.yaml" {
+		t.Errorf("ApplyFlags 应设置 ConfigPath 为 /tmp/test.yaml, 实际 %s", cfg.ConfigPath)
 	}
 }
 

@@ -22,10 +22,15 @@ type Brain struct {
 
 // NewBrain 创建新大脑
 func NewBrain(scheduler *cron.Scheduler, cfg *config.Config) *Brain {
+	store, err := memory.NewStore(cfg)
+	if err != nil {
+		// 记忆系统初始化失败不应阻止启动，打印警告继续
+		fmt.Printf("警告: 记忆系统初始化失败: %v\n", err)
+	}
 	return &Brain{
 		provider: llm.NewProviderManager(cfg),
 		executor: tools.NewExecutor(scheduler, cfg),
-		memory:   memory.NewStore(cfg),
+		memory:   store,
 		history:  []llm.Message{},
 		cfg:      cfg,
 	}
@@ -57,7 +62,7 @@ func (b *Brain) Chat(userInput string) (string, error) {
 				if err != nil {
 					result = fmt.Sprintf("Error: %v", err)
 				}
-				result = b.truncateToolOutput(result)
+				result = b.compressToolOutput(result)
 				allResults = append(allResults, fmt.Sprintf("tool %s:\n%s", tc.Function.Name, result))
 				b.appendRawMessage(llm.Message{
 					Role:       "tool",
@@ -70,8 +75,10 @@ func (b *Brain) Chat(userInput string) (string, error) {
 
 		content := choice.Message.Content
 		b.addMessage("assistant", content)
-		b.memory.SaveMessage("user", userInput)
-		b.memory.SaveMessage("assistant", content)
+		if b.memory != nil {
+			b.memory.SaveMessage("user", userInput)
+			b.memory.SaveMessage("assistant", content)
+		}
 		allResults = append(allResults, content)
 		return strings.Join(allResults, "\n\n"), nil
 	}
@@ -124,9 +131,11 @@ func (b *Brain) ChatStream(userInput string) (<-chan StreamEvent, error) {
 						b.addMessage("assistant", roundContent)
 						finalContent = roundContent
 					}
-					b.memory.SaveMessage("user", userInput)
-					if finalContent != "" {
-						b.memory.SaveMessage("assistant", finalContent)
+					if b.memory != nil {
+						b.memory.SaveMessage("user", userInput)
+						if finalContent != "" {
+							b.memory.SaveMessage("assistant", finalContent)
+						}
 					}
 					eventChan <- StreamEvent{Type: "done"}
 					return
@@ -151,7 +160,7 @@ func (b *Brain) ChatStream(userInput string) (<-chan StreamEvent, error) {
 					if err != nil {
 						result = fmt.Sprintf("Error: %v", err)
 					}
-					result = b.truncateToolOutput(result)
+					result = b.compressToolOutput(result)
 
 					b.appendRawMessage(llm.Message{
 						Role:       "tool",
@@ -174,9 +183,11 @@ func (b *Brain) ChatStream(userInput string) (<-chan StreamEvent, error) {
 				b.addMessage("assistant", roundContent)
 				finalContent = roundContent
 			}
-			b.memory.SaveMessage("user", userInput)
-			if finalContent != "" {
-				b.memory.SaveMessage("assistant", finalContent)
+			if b.memory != nil {
+				b.memory.SaveMessage("user", userInput)
+				if finalContent != "" {
+					b.memory.SaveMessage("assistant", finalContent)
+				}
 			}
 			eventChan <- StreamEvent{Type: "done"}
 			return
@@ -189,15 +200,30 @@ func (b *Brain) ChatStream(userInput string) (<-chan StreamEvent, error) {
 	return eventChan, nil
 }
 
-// truncateToolOutput 截断过长的工具输出
-func (b *Brain) truncateToolOutput(output string) string {
+// compressToolOutput 智能压缩工具输出
+// 输出 > 2KB 时保留头尾，中间部分省略
+func (b *Brain) compressToolOutput(output string) string {
 	maxSize := b.cfg.Tools.MaxOutputSize
 	if maxSize <= 0 {
 		maxSize = 51200
 	}
+
+	// 先做硬截断
 	if len(output) > maxSize {
-		return output[:maxSize] + fmt.Sprintf("\n\n... [输出被截断，原始 %d 字节]", len(output))
+		output = output[:maxSize] + fmt.Sprintf("\n\n... [输出被截断，原始 %d 字节]", len(output))
 	}
+
+	// 智能压缩：输出超过 2KB 时保留头尾
+	compressThreshold := 2048
+	if len(output) > compressThreshold {
+		headSize := compressThreshold * 3 / 4 // 前 75%
+		tailSize := compressThreshold / 4      // 后 25%
+		omitted := len(output) - headSize - tailSize
+		output = output[:headSize] +
+			fmt.Sprintf("\n\n... [省略 %d 字节] ...\n\n", omitted) +
+			output[len(output)-tailSize:]
+	}
+
 	return output
 }
 
@@ -225,14 +251,27 @@ func (b *Brain) getMessages() []llm.Message {
 	toolNames := b.executor.ListTools()
 	toolList := strings.Join(toolNames, ", ")
 
-	systemPrompt := llm.Message{
-		Role: "system",
-		Content: fmt.Sprintf(`你是 Kele，一个智能的终端 AI 助手。你可以：
+	systemContent := fmt.Sprintf(`你是 Kele，一个智能的终端 AI 助手。你可以：
 1. 回答问题和进行对话
 2. 使用工具执行操作（可用工具: %s）
 3. 管理定时任务（cron）
 
-请用中文回答，保持简洁专业。当需要执行操作时，主动使用工具。`, toolList),
+请用中文回答，保持简洁专业。当需要执行操作时，主动使用工具。`, toolList)
+
+	// 动态注入相关记忆到 system prompt
+	if b.memory != nil {
+		memories, err := b.memory.GetRecentMemories(5)
+		if err == nil && len(memories) > 0 {
+			systemContent += "\n\n## 用户长期记忆\n"
+			for _, m := range memories {
+				systemContent += "- " + m + "\n"
+			}
+		}
+	}
+
+	systemPrompt := llm.Message{
+		Role:    "system",
+		Content: systemContent,
 	}
 
 	messages := []llm.Message{systemPrompt}
@@ -240,8 +279,8 @@ func (b *Brain) getMessages() []llm.Message {
 	return messages
 }
 
-func (b *Brain) GetHistory() []llm.Message  { return b.history }
-func (b *Brain) ClearHistory()              { b.history = []llm.Message{} }
+func (b *Brain) GetHistory() []llm.Message { return b.history }
+func (b *Brain) ClearHistory()             { b.history = []llm.Message{} }
 
 // StreamEvent 流式事件（Agent 层）
 type StreamEvent struct {
@@ -258,18 +297,42 @@ type ToolExecution struct {
 	Result string
 }
 
-func (b *Brain) SaveMemory(key, value string) error     { return b.memory.UpdateMemory(key, value) }
-func (b *Brain) SearchMemory(query string) ([]string, error) { return b.memory.Search(query, 5) }
+func (b *Brain) SaveMemory(key, value string) error {
+	if b.memory == nil {
+		return fmt.Errorf("记忆系统未初始化")
+	}
+	return b.memory.UpdateMemory(key, value)
+}
+func (b *Brain) SearchMemory(query string) ([]string, error) {
+	if b.memory == nil {
+		return nil, fmt.Errorf("记忆系统未初始化")
+	}
+	return b.memory.Search(query, 5)
+}
 
-func (b *Brain) SetModel(model string)         { b.provider.SetModel(model) }
-func (b *Brain) GetModel() string               { return b.provider.GetModel() }
-func (b *Brain) GetDefaultModel() string        { return b.provider.GetDefaultModel() }
-func (b *Brain) ResetModel()                    { b.provider.ResetModel() }
-func (b *Brain) GetSmallModel() string          { return b.provider.GetSmallModel() }
-func (b *Brain) SetSmallModel(model string)     { b.provider.SetSmallModel(model) }
-func (b *Brain) GetProviderName() string        { return b.provider.GetActiveProviderName() }
-func (b *Brain) ListProviders() []string        { return b.provider.ListProviders() }
-func (b *Brain) ListTools() []string            { return b.executor.ListTools() }
+// GetMemoryStore 获取底层记忆存储（用于会话恢复等）
+func (b *Brain) GetMemoryStore() *memory.Store { return b.memory }
+
+func (b *Brain) SetModel(model string)     { b.provider.SetModel(model) }
+func (b *Brain) GetModel() string           { return b.provider.GetModel() }
+func (b *Brain) GetDefaultModel() string    { return b.provider.GetDefaultModel() }
+func (b *Brain) ResetModel()                { b.provider.ResetModel() }
+func (b *Brain) GetSmallModel() string      { return b.provider.GetSmallModel() }
+func (b *Brain) SetSmallModel(model string) { b.provider.SetSmallModel(model) }
+func (b *Brain) GetProviderName() string    { return b.provider.GetActiveProviderName() }
+func (b *Brain) ListProviders() []string    { return b.provider.ListProviders() }
+func (b *Brain) ListTools() []string        { return b.executor.ListTools() }
+
+// GetProviderInfo 获取当前供应商详细信息
+func (b *Brain) GetProviderInfo() map[string]string {
+	return map[string]string{
+		"provider":     b.provider.GetActiveProviderName(),
+		"model":        b.provider.GetModel(),
+		"defaultModel": b.provider.GetDefaultModel(),
+		"smallModel":   b.provider.GetSmallModel(),
+		"supportsTools": fmt.Sprintf("%v", b.provider.ActiveSupportsTools()),
+	}
+}
 
 // EstimateTokens 估算当前历史的 Token 数量
 func (b *Brain) EstimateTokens() int {

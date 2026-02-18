@@ -20,10 +20,10 @@ import (
 // allCommands 所有可用命令
 var allCommands = []string{
 	"/help", "/clear", "/reset", "/exit", "/quit",
-	"/model", "/models", "/model-reset", "/model-small",
+	"/model", "/models", "/model-reset", "/model-small", "/model-info",
 	"/remember", "/search", "/memory",
 	"/status", "/config", "/history", "/tokens", "/tools",
-	"/save", "/export", "/debug",
+	"/save", "/export", "/load", "/debug",
 	"/new", "/sessions", "/switch", "/rename",
 	"/cron",
 }
@@ -172,7 +172,25 @@ func (a *App) shouldTick() bool {
 
 // Init 初始化
 func (a *App) Init() tea.Cmd {
+	// 尝试恢复上次会话
+	a.tryRestoreSession()
 	return textarea.Blink
+}
+
+// tryRestoreSession 尝试恢复最近的会话
+func (a *App) tryRestoreSession() {
+	sess := a.currentSession()
+	memStore := sess.brain.GetMemoryStore()
+	if memStore == nil {
+		return
+	}
+	latest, err := memStore.GetLatestSession()
+	if err != nil || latest == nil {
+		return
+	}
+	if latest.MessageCount > 0 {
+		sess.AddMessage("assistant", fmt.Sprintf("检测到上次会话: %s (%d 条消息)\n输入 /load %s 恢复", latest.ID, latest.MessageCount, latest.ID))
+	}
 }
 
 // Update 处理消息

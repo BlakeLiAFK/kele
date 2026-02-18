@@ -1,5 +1,68 @@
 # 更新日志
 
+## v0.2.0 - 2026-02-18
+
+### ✨ 新功能
+
+- **多供应商 LLM 支持**: 新增 Anthropic Claude 和 Ollama 本地模型供应商
+  - 自动根据模型名推断供应商 (gpt-* → OpenAI, claude-* → Anthropic, 含 : → Ollama)
+  - 运行时无缝切换模型和供应商
+  - Ollama 模型自动发现 (`ListModels` 查询 `/api/tags`)
+
+- **FTS5 全文搜索**: 记忆系统恢复并增强 FTS5 支持
+  - BM25 排序的全文搜索
+  - AND → OR 自动降级策略
+  - FTS5 不可用时自动降级为 LIKE 查询
+  - `unicode61` 分词器支持
+
+- **审计日志系统**: 工具调用全程记录
+  - JSONL 格式写入 `.kele/audit.log`
+  - 记录工具名、参数摘要、结果摘要、耗时、错误
+  - 线程安全的追加写入
+
+- **API 自动重试**: LLM 调用失败自动重试
+  - 最多 3 次重试，指数退避 (1s, 2s, 4s)
+  - 智能判断可重试错误 (网络超时/429/5xx)
+
+- **工具输出智能压缩**: 大输出自动头尾保留
+  - 超过 2KB 阈值自动压缩
+  - 保留前 75% 头部 + 后 25% 尾部
+  - 标注省略字节数
+
+- **动态记忆注入**: System prompt 自动包含最近记忆
+  - 最近 5 条记忆条目注入到 system prompt
+  - 增强 AI 对用户偏好的感知
+
+- **新增 CLI 参数**
+  - `--config` 指定配置文件路径
+  - `--debug` 启用调试模式（日志写入 `.kele/debug.log`）
+
+- **新增 Slash 命令**
+  - `/model-info` 查看模型和供应商详细信息
+  - `/load [session-id]` 列出/加载已保存的会话
+
+- **启动时会话恢复提示**: 检测到上次会话时自动提示恢复
+
+- **Git diff 语法高亮**: diff/show 输出添加 ANSI 颜色标记
+  - 新增行 (绿色)、删除行 (红色)、位置标记 (青色)
+
+### 🔧 技术改进
+
+- `memory.NewStore` 改为返回 `(*Store, error)`，不再 panic
+- `config.ApplyFlags` 新增 `configPath` 参数
+- Brain 层所有记忆操作增加 nil 安全检查
+- 新增 `internal/tools/audit.go` 审计日志模块
+- 新增 `internal/agent/brain_test.go` 单元测试
+- 更新 `config_test.go` 和 `store_test.go` 适配 API 变更
+- 新增 `GetRecentMemories`、`GetLatestSession`、`HasFTS5` 等方法
+
+### 🐛 Bug 修复
+
+- 修复 memory store 初始化失败导致程序 panic 的问题
+- 修复 FTS5 模块编译问题（v0.1.1 移除后重新实现，带优雅降级）
+
+---
+
 ## v0.1.3 - 2026-02-06
 
 ### ✨ 新功能

@@ -16,6 +16,10 @@ type Config struct {
 	Memory MemoryConfig
 	TUI    TUIConfig
 	Cron   CronConfig
+
+	// 全局选项
+	Debug      bool
+	ConfigPath string
 }
 
 // LLMConfig LLM 相关配置
@@ -54,6 +58,7 @@ type MemoryConfig struct {
 	DBPath     string
 	MemoryFile string
 	SessionDir string
+	AuditLog   string
 }
 
 // TUIConfig TUI 配置
@@ -106,6 +111,7 @@ func Load() *Config {
 			DBPath:     getEnv("KELE_DB_PATH", ".kele/memory.db"),
 			MemoryFile: getEnv("KELE_MEMORY_FILE", ".kele/MEMORY.md"),
 			SessionDir: getEnv("KELE_SESSION_DIR", ".kele/sessions"),
+			AuditLog:   getEnv("KELE_AUDIT_LOG", ".kele/audit.log"),
 		},
 		TUI: TUIConfig{
 			MaxSessions:   getEnvInt("KELE_MAX_SESSIONS", 9),
@@ -118,14 +124,17 @@ func Load() *Config {
 		},
 	}
 
-	// CLI flags 覆盖（由 main.go 调用 ApplyFlags 设置）
 	return cfg
 }
 
 // ApplyFlags 应用 CLI 参数覆盖
-func (c *Config) ApplyFlags(model string, debug bool) {
+func (c *Config) ApplyFlags(model string, debug bool, configPath string) {
 	if model != "" {
 		c.LLM.OpenAIModel = model
+	}
+	c.Debug = debug
+	if configPath != "" {
+		c.ConfigPath = configPath
 	}
 }
 
