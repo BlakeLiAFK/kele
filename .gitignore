@@ -17,6 +17,9 @@ coverage.html
 .kele/MEMORY.md
 .kele/export_*.md
 
+# 测试生成的运行时数据（任意目录下的 .kele/）
+**/.kele/
+
 # IDE
 .idea/
 .vscode/
