@@ -1,5 +1,64 @@
 # 更新日志
 
+## v0.3.0 - 2026-02-20
+
+### ✨ 新功能
+
+- **Cobra CLI 框架**: 单二进制多模式架构
+  - `kele` — 交互式 TUI（默认）
+  - `kele daemon start/stop/status` — 后台守护进程管理
+  - `kele agent "prompt"` — 无头 Agent 模式（脚本/CI 集成）
+  - `kele version` — 版本信息
+
+- **gRPC 守护进程**: 持久化后台服务，通过 Unix Socket 通信
+  - 基于 Protobuf 的 8 个 RPC（含服务端流式 Chat）
+  - Unix Socket (`~/.kele/kele.sock`) IPC，PID 文件管理
+  - 共享资源（ProviderManager、Executor、Memory.Store、Scheduler）
+  - SessionBrain 模式：每会话独立历史，共享底层资源
+  - TUI 自动启动守护进程（fork `kele daemon start --foreground`）
+
+- **TUI 双模式**: 支持 standalone 和 daemon 两种运行模式
+  - Standalone 模式：直接使用本地 Brain（测试/回退）
+  - Daemon 模式：通过 gRPC 客户端与守护进程通信
+  - 命令自动路由：TUI-local 命令本地处理，其余转发至守护进程
+  - 补全引擎同步支持双模式
+
+- **Heartbeat 系统**: AI 驱动的定期系统监控
+  - 动态频率调度（夜间 60 分钟，工作时间 15 分钟，其他 30 分钟）
+  - 系统快照（goroutine 数、内存用量、CPU 信息、活跃会话数）
+  - HEARTBEAT.md 配置文件（支持 CWD、~/、~/.kele/ 三级查找）
+  - LLM 自主决策 + 工具调用执行
+  - 执行记录追踪（最近 100 条）
+  - gRPC 状态查询 API
+
+- **Agent 模式**: 无头非交互式 Agent
+  - 单次 prompt 执行，支持流式输出
+  - 自动启动守护进程连接
+  - 适用于脚本、CI/CD、管道集成
+
+### 🔧 技术改进
+
+- 使用 Protobuf + gRPC 替代之前的进程内调用，支持跨进程通信
+- 服务端流式 Chat 消除了之前的 4 层事件转换链
+- Cobra 命令框架提供标准化的 CLI 体验
+- 新增 `internal/daemon/` 包（daemon.go, session.go, server.go）
+- 新增 `internal/cli/` 包（root.go, daemon.go, agent.go, version.go）
+- 新增 `internal/heartbeat/` 包（heartbeat.go, snapshot.go）
+- 新增 `internal/tui/client.go` gRPC 客户端封装
+- 新增 `internal/proto/` 生成的 gRPC/Protobuf 代码
+- 新增 `proto/kele.proto` 服务定义（8 RPCs）
+- 重构 `cmd/kele/main.go` 使用 Cobra 入口
+- 重构 TUI app.go, commands.go, completion.go, view.go 支持双模式
+- 跨平台守护进程 fork 支持（Unix SysProcAttr / Windows 占位）
+
+### 📦 新增依赖
+
+- `google.golang.org/grpc` v1.79.1
+- `google.golang.org/protobuf` v1.36.11
+- `github.com/spf13/cobra` v1.10.2
+
+---
+
 ## v0.2.0 - 2026-02-18
 
 ### ✨ 新功能

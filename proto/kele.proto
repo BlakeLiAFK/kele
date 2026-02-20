@@ -1,0 +1,121 @@
+syntax = "proto3";
+
+package kele;
+
+option go_package = "github.com/BlakeLiAFK/kele/internal/proto";
+
+// KeleService is the main daemon gRPC service.
+// All client modes (TUI, Agent) communicate with the daemon through this service.
+service KeleService {
+  // Chat sends a message and receives streaming response events.
+  rpc Chat(ChatRequest) returns (stream ChatEvent);
+
+  // Complete performs AI input completion using the small model.
+  rpc Complete(CompleteRequest) returns (CompleteResponse);
+
+  // RunCommand executes a slash command within a session.
+  rpc RunCommand(RunCommandRequest) returns (RunCommandResponse);
+
+  // CreateSession creates a new chat session on the daemon.
+  rpc CreateSession(CreateSessionRequest) returns (SessionInfo);
+
+  // DeleteSession removes a session.
+  rpc DeleteSession(DeleteSessionRequest) returns (Empty);
+
+  // ListSessions returns all active sessions.
+  rpc ListSessions(Empty) returns (ListSessionsResponse);
+
+  // GetStatus returns daemon status information.
+  rpc GetStatus(Empty) returns (StatusResponse);
+
+  // GetHeartbeatStatus returns heartbeat system status.
+  rpc GetHeartbeatStatus(Empty) returns (HeartbeatStatusResponse);
+}
+
+message Empty {}
+
+// --- Chat ---
+
+message ChatRequest {
+  string session_id = 1;
+  string input = 2;
+}
+
+// ChatEvent types: content, thinking, tool_call, tool_result, error, done
+message ChatEvent {
+  string type = 1;
+  string content = 2;
+  string tool_name = 3;
+  string tool_result = 4;
+  string error = 5;
+}
+
+// --- Completion ---
+
+message CompleteRequest {
+  string session_id = 1;
+  string input = 2;
+}
+
+message CompleteResponse {
+  string suggestion = 1;
+}
+
+// --- Commands ---
+
+message RunCommandRequest {
+  string session_id = 1;
+  string command = 2;
+}
+
+message RunCommandResponse {
+  string output = 1;
+  bool quit = 2;
+}
+
+// --- Sessions ---
+
+message CreateSessionRequest {
+  string name = 1;
+}
+
+message DeleteSessionRequest {
+  string session_id = 1;
+}
+
+message SessionInfo {
+  string id = 1;
+  string name = 2;
+  int32 message_count = 3;
+  int32 history_count = 4;
+  string model = 5;
+  string provider = 6;
+}
+
+message ListSessionsResponse {
+  repeated SessionInfo sessions = 1;
+}
+
+// --- Status ---
+
+message StatusResponse {
+  string version = 1;
+  string provider = 2;
+  repeated string providers = 3;
+  string model = 4;
+  string small_model = 5;
+  int32 active_sessions = 6;
+  int32 uptime_seconds = 7;
+  bool heartbeat_active = 8;
+}
+
+// --- Heartbeat ---
+
+message HeartbeatStatusResponse {
+  bool active = 1;
+  int32 interval_minutes = 2;
+  string last_run = 3;
+  string last_decision = 4;
+  int32 total_heartbeats = 5;
+  int32 actions_taken = 6;
+}

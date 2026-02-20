@@ -258,9 +258,23 @@ func renderOverlay(a *App, width, height int) string {
 		content.WriteString(fmt.Sprintf("  %s%d: %s (%d msgs)\n", marker, i+1, s.name, len(s.messages)))
 	}
 
-	content.WriteString(fmt.Sprintf("\n  Provider: %s\n", sess.brain.GetProviderName()))
-	content.WriteString(fmt.Sprintf("  Model: %s\n", sess.brain.GetModel()))
-	content.WriteString(fmt.Sprintf("  Small Model: %s\n", sess.brain.GetSmallModel()))
+	if sess.brain != nil {
+		content.WriteString(fmt.Sprintf("\n  Provider: %s\n", sess.brain.GetProviderName()))
+		content.WriteString(fmt.Sprintf("  Model: %s\n", sess.brain.GetModel()))
+		content.WriteString(fmt.Sprintf("  Small Model: %s\n", sess.brain.GetSmallModel()))
+	} else {
+		provider := sess.provider
+		model := sess.model
+		if provider == "" {
+			provider = "daemon"
+		}
+		if model == "" {
+			model = "unknown"
+		}
+		content.WriteString(fmt.Sprintf("\n  Mode: daemon\n"))
+		content.WriteString(fmt.Sprintf("  Provider: %s\n", provider))
+		content.WriteString(fmt.Sprintf("  Model: %s\n", model))
+	}
 	content.WriteString(fmt.Sprintf("\n  Keybindings:\n"))
 	content.WriteString("    Ctrl+Right  Next session\n")
 	content.WriteString("    Ctrl+Left   Prev session\n")

@@ -10,6 +10,13 @@ import (
 	"github.com/BlakeLiAFK/kele/internal/config"
 )
 
+// TUI-local commands (never forwarded to daemon)
+var tuiLocalCommands = map[string]bool{
+	"/new": true, "/sessions": true, "/switch": true, "/rename": true,
+	"/exit": true, "/quit": true,
+	"/export": true, "/debug": true,
+}
+
 // handleCommand 处理斜杠命令
 func (a *App) handleCommand(cmd string) {
 	parts := strings.Fields(cmd)
@@ -20,6 +27,12 @@ func (a *App) handleCommand(cmd string) {
 	sess := a.currentSession()
 	command := parts[0]
 	args := parts[1:]
+
+	// Daemon 模式：非 TUI-local 命令转发到 daemon
+	if a.isDaemonMode() && !tuiLocalCommands[command] {
+		a.handleDaemonCommand(command, args, cmd)
+		return
+	}
 
 	switch command {
 	case "/help":
@@ -84,7 +97,9 @@ func (a *App) handleCommand(cmd string) {
 
 	case "/clear", "/reset":
 		sess.messages = []Message{}
-		sess.brain.ClearHistory()
+		if sess.brain != nil {
+			sess.brain.ClearHistory()
+		}
 		a.completion.ClearCache()
 		a.viewport.SetContent("")
 		a.updateStatus("对话已清空")
@@ -131,7 +146,9 @@ func (a *App) handleCommand(cmd string) {
 		}
 
 	case "/model":
-		if len(args) == 0 {
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "standalone 模式下 brain 未初始化")
+		} else if len(args) == 0 {
 			sess.AddMessage("assistant", fmt.Sprintf("当前大模型: %s\n供应商: %s\n默认模型: %s\n小模型: %s\n\n使用 /model <name> 切换（自动匹配供应商）",
 				sess.brain.GetModel(), sess.brain.GetProviderName(),
 				sess.brain.GetDefaultModel(), sess.brain.GetSmallModel()))
@@ -143,7 +160,9 @@ func (a *App) handleCommand(cmd string) {
 		}
 
 	case "/model-small":
-		if len(args) == 0 {
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "standalone 模式下 brain 未初始化")
+		} else if len(args) == 0 {
 			sess.AddMessage("assistant", fmt.Sprintf("当前小模型: %s\n\n使用 /model-small <name> 切换", sess.brain.GetSmallModel()))
 		} else {
 			modelName := strings.Join(args, " ")
@@ -152,56 +171,71 @@ func (a *App) handleCommand(cmd string) {
 		}
 
 	case "/models":
-		providers := sess.brain.ListProviders()
-		var sb strings.Builder
-		sb.WriteString("可用模型列表\n\n")
-		sb.WriteString(fmt.Sprintf("已注册供应商: %s\n", strings.Join(providers, ", ")))
-		sb.WriteString(fmt.Sprintf("当前: %s (%s)\n\n", sess.brain.GetModel(), sess.brain.GetProviderName()))
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "standalone 模式下 brain 未初始化")
+		} else {
+			providers := sess.brain.ListProviders()
+			var sb strings.Builder
+			sb.WriteString("可用模型列表\n\n")
+			sb.WriteString(fmt.Sprintf("已注册供应商: %s\n", strings.Join(providers, ", ")))
+			sb.WriteString(fmt.Sprintf("当前: %s (%s)\n\n", sess.brain.GetModel(), sess.brain.GetProviderName()))
 
-		sb.WriteString("OpenAI:\n")
-		sb.WriteString("  gpt-4o              大模型推荐\n")
-		sb.WriteString("  gpt-4o-mini          小模型推荐\n")
-		sb.WriteString("  gpt-4-turbo          GPT-4 Turbo\n")
-		sb.WriteString("  o1-preview           推理模型\n\n")
+			sb.WriteString("OpenAI:\n")
+			sb.WriteString("  gpt-4o              大模型推荐\n")
+			sb.WriteString("  gpt-4o-mini          小模型推荐\n")
+			sb.WriteString("  gpt-4-turbo          GPT-4 Turbo\n")
+			sb.WriteString("  o1-preview           推理模型\n\n")
 
-		sb.WriteString("Anthropic Claude:\n")
-		sb.WriteString("  claude-sonnet-4-5-20250929   最新 Sonnet\n")
-		sb.WriteString("  claude-haiku-4-5-20251001    最新 Haiku\n")
-		sb.WriteString("  claude-3-5-sonnet-20241022   Sonnet 3.5\n\n")
+			sb.WriteString("Anthropic Claude:\n")
+			sb.WriteString("  claude-sonnet-4-5-20250929   最新 Sonnet\n")
+			sb.WriteString("  claude-haiku-4-5-20251001    最新 Haiku\n")
+			sb.WriteString("  claude-3-5-sonnet-20241022   Sonnet 3.5\n\n")
 
-		sb.WriteString("DeepSeek (OpenAI 兼容):\n")
-		sb.WriteString("  deepseek-chat        大模型\n")
-		sb.WriteString("  deepseek-reasoner    推理模型\n\n")
+			sb.WriteString("DeepSeek (OpenAI 兼容):\n")
+			sb.WriteString("  deepseek-chat        大模型\n")
+			sb.WriteString("  deepseek-reasoner    推理模型\n\n")
 
-		sb.WriteString("Ollama 本地模型 (名称含 :):\n")
-		sb.WriteString("  llama3:8b            Llama 3\n")
-		sb.WriteString("  qwen2:7b             通义千问\n")
-		sb.WriteString("  codellama:13b        代码模型\n\n")
+			sb.WriteString("Ollama 本地模型 (名称含 :):\n")
+			sb.WriteString("  llama3:8b            Llama 3\n")
+			sb.WriteString("  qwen2:7b             通义千问\n")
+			sb.WriteString("  codellama:13b        代码模型\n\n")
 
-		sb.WriteString("用法:\n")
-		sb.WriteString("  /model gpt-4o               自动选择 OpenAI\n")
-		sb.WriteString("  /model claude-sonnet-4-5-20250929   自动选择 Anthropic\n")
-		sb.WriteString("  /model llama3:8b             自动选择 Ollama\n")
-		sb.WriteString("  /model-small gpt-4o-mini     设置小模型")
-		sess.AddMessage("assistant", sb.String())
+			sb.WriteString("用法:\n")
+			sb.WriteString("  /model gpt-4o               自动选择 OpenAI\n")
+			sb.WriteString("  /model claude-sonnet-4-5-20250929   自动选择 Anthropic\n")
+			sb.WriteString("  /model llama3:8b             自动选择 Ollama\n")
+			sb.WriteString("  /model-small gpt-4o-mini     设置小模型")
+			sess.AddMessage("assistant", sb.String())
+		}
 
 	case "/model-reset":
-		sess.brain.ResetModel()
-		sess.AddMessage("assistant", fmt.Sprintf("已重置为默认模型: %s (%s)", sess.brain.GetDefaultModel(), sess.brain.GetProviderName()))
-		a.updateStatus("Ready")
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "standalone 模式下 brain 未初始化")
+		} else {
+			sess.brain.ResetModel()
+			sess.AddMessage("assistant", fmt.Sprintf("已重置为默认模型: %s (%s)", sess.brain.GetDefaultModel(), sess.brain.GetProviderName()))
+			a.updateStatus("Ready")
+		}
 
 	case "/tools":
-		toolNames := sess.brain.ListTools()
-		var sb strings.Builder
-		sb.WriteString(fmt.Sprintf("可用工具 (%d 个)\n\n", len(toolNames)))
-		for i, name := range toolNames {
-			sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, name))
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "standalone 模式下 brain 未初始化")
+		} else {
+			toolNames := sess.brain.ListTools()
+			var sb strings.Builder
+			sb.WriteString(fmt.Sprintf("可用工具 (%d 个)\n\n", len(toolNames)))
+			for i, name := range toolNames {
+				sb.WriteString(fmt.Sprintf("  %d. %s\n", i+1, name))
+			}
+			sb.WriteString("\nAI 会根据对话内容自动调用工具")
+			sess.AddMessage("assistant", sb.String())
 		}
-		sb.WriteString("\nAI 会根据对话内容自动调用工具")
-		sess.AddMessage("assistant", sb.String())
 
 	case "/status":
-		sess.AddMessage("assistant", fmt.Sprintf(`系统状态
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "standalone 模式下 brain 未初始化")
+		} else {
+			sess.AddMessage("assistant", fmt.Sprintf(`系统状态
 
 版本: Kele v%s
 供应商: %s
@@ -214,19 +248,21 @@ func (a *App) handleCommand(cmd string) {
 Token 估算: ~%d
 窗口: %d x %d
 时间: %s`,
-			config.Version,
-			sess.brain.GetProviderName(),
-			strings.Join(sess.brain.ListProviders(), ", "),
-			a.activeIdx+1, len(a.sessions), sess.name,
-			len(sess.messages), len(sess.brain.GetHistory()),
-			sess.brain.GetModel(), sess.brain.GetSmallModel(),
-			sess.brain.EstimateTokens(),
-			a.width, a.height,
-			time.Now().Format("2006-01-02 15:04:05")))
+				config.Version,
+				sess.brain.GetProviderName(),
+				strings.Join(sess.brain.ListProviders(), ", "),
+				a.activeIdx+1, len(a.sessions), sess.name,
+				len(sess.messages), len(sess.brain.GetHistory()),
+				sess.brain.GetModel(), sess.brain.GetSmallModel(),
+				sess.brain.EstimateTokens(),
+				a.width, a.height,
+				time.Now().Format("2006-01-02 15:04:05")))
+		}
 
 	case "/config":
 		cfg := a.cfg
-		sess.AddMessage("assistant", fmt.Sprintf(`当前配置 (v%s)
+		if sess.brain != nil {
+			sess.AddMessage("assistant", fmt.Sprintf(`当前配置 (v%s)
 
 LLM:
   OpenAI API Base:  %s
@@ -254,40 +290,49 @@ TUI:
 运行时:
   大模型: %s (%s)
   小模型: %s`,
-			config.Version,
-			cfg.LLM.OpenAIAPIBase,
-			maskKey(cfg.LLM.OpenAIAPIKey),
-			maskKey(cfg.LLM.AnthropicAPIKey),
-			cfg.LLM.OllamaHost,
-			cfg.LLM.OpenAIModel,
-			cfg.LLM.Temperature,
-			cfg.LLM.MaxTokens,
-			cfg.Tools.BashTimeout,
-			cfg.Tools.MaxOutputSize,
-			cfg.Tools.MaxWriteSize,
-			cfg.Memory.DBPath,
-			cfg.Memory.MemoryFile,
-			cfg.Memory.SessionDir,
-			cfg.TUI.MaxSessions,
-			cfg.TUI.MaxInputChars,
-			sess.brain.GetModel(), sess.brain.GetProviderName(),
-			sess.brain.GetSmallModel()))
+				config.Version,
+				cfg.LLM.OpenAIAPIBase,
+				maskKey(cfg.LLM.OpenAIAPIKey),
+				maskKey(cfg.LLM.AnthropicAPIKey),
+				cfg.LLM.OllamaHost,
+				cfg.LLM.OpenAIModel,
+				cfg.LLM.Temperature,
+				cfg.LLM.MaxTokens,
+				cfg.Tools.BashTimeout,
+				cfg.Tools.MaxOutputSize,
+				cfg.Tools.MaxWriteSize,
+				cfg.Memory.DBPath,
+				cfg.Memory.MemoryFile,
+				cfg.Memory.SessionDir,
+				cfg.TUI.MaxSessions,
+				cfg.TUI.MaxInputChars,
+				sess.brain.GetModel(), sess.brain.GetProviderName(),
+				sess.brain.GetSmallModel()))
+		} else {
+			sess.AddMessage("assistant", fmt.Sprintf("当前配置 (v%s)\n\n运行模式: daemon", config.Version))
+		}
 
 	case "/history":
-		history := sess.brain.GetHistory()
-		var sb strings.Builder
-		sb.WriteString("对话历史\n\n")
-		for i, msg := range history {
-			sb.WriteString(fmt.Sprintf("%d. [%s] %s\n\n",
-				i+1, msg.Role, truncateStr(msg.Content, 100)))
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "daemon 模式下历史由 daemon 管理")
+		} else {
+			history := sess.brain.GetHistory()
+			var sb strings.Builder
+			sb.WriteString("对话历史\n\n")
+			for i, msg := range history {
+				sb.WriteString(fmt.Sprintf("%d. [%s] %s\n\n",
+					i+1, msg.Role, truncateStr(msg.Content, 100)))
+			}
+			if len(history) == 0 {
+				sb.WriteString("(暂无历史记录)")
+			}
+			sess.AddMessage("assistant", sb.String())
 		}
-		if len(history) == 0 {
-			sb.WriteString("(暂无历史记录)")
-		}
-		sess.AddMessage("assistant", sb.String())
 
 	case "/remember":
-		if len(args) == 0 {
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "daemon 模式下记忆由 daemon 管理")
+		} else if len(args) == 0 {
 			sess.AddMessage("assistant", "用法: /remember <要记住的内容>")
 		} else {
 			text := strings.Join(args, " ")
@@ -300,7 +345,9 @@ TUI:
 		}
 
 	case "/search":
-		if len(args) == 0 {
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "daemon 模式下搜索由 daemon 管理")
+		} else if len(args) == 0 {
 			sess.AddMessage("assistant", "用法: /search <搜索关键词>")
 		} else {
 			query := strings.Join(args, " ")
@@ -323,9 +370,12 @@ TUI:
 		sess.AddMessage("assistant", fmt.Sprintf("记忆系统\n\n命令:\n  /remember <text>  添加到长期记忆\n  /search <query>   搜索记忆\n\n存储: %s", a.cfg.Memory.DBPath))
 
 	case "/tokens":
-		tokens := sess.brain.EstimateTokens()
-		historyLen := len(sess.brain.GetHistory())
-		sess.AddMessage("assistant", fmt.Sprintf(`Token 估算
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "daemon 模式下 token 估算由 daemon 管理")
+		} else {
+			tokens := sess.brain.EstimateTokens()
+			historyLen := len(sess.brain.GetHistory())
+			sess.AddMessage("assistant", fmt.Sprintf(`Token 估算
 
 当前会话:
   历史消息数: %d
@@ -333,6 +383,7 @@ TUI:
   模型: %s (%s)
 
 注: Token 数为粗略估算（约 4 字符/token），仅供参考`, historyLen, tokens, sess.brain.GetModel(), sess.brain.GetProviderName()))
+		}
 
 	case "/save":
 		sessionID := fmt.Sprintf("session_%d_%d", sess.id, time.Now().Unix())
@@ -346,7 +397,13 @@ TUI:
 		var export strings.Builder
 		export.WriteString("# Kele 对话导出\n\n")
 		export.WriteString(fmt.Sprintf("导出时间: %s\n", time.Now().Format("2006-01-02 15:04:05")))
-		export.WriteString(fmt.Sprintf("模型: %s (%s)\n\n---\n\n", sess.brain.GetModel(), sess.brain.GetProviderName()))
+		modelInfo := "unknown"
+		if sess.brain != nil {
+			modelInfo = fmt.Sprintf("%s (%s)", sess.brain.GetModel(), sess.brain.GetProviderName())
+		} else if sess.model != "" {
+			modelInfo = fmt.Sprintf("%s (%s)", sess.model, sess.provider)
+		}
+		export.WriteString(fmt.Sprintf("模型: %s\n\n---\n\n", modelInfo))
 		for _, msg := range sess.messages {
 			if msg.Role == "user" {
 				export.WriteString(fmt.Sprintf("## You\n\n%s\n\n", msg.Content))
@@ -366,9 +423,15 @@ TUI:
 		}
 
 	case "/debug":
+		brainInfo := "nil (daemon mode)"
+		if sess.brain != nil {
+			brainInfo = fmt.Sprintf("model=%s, provider=%s, tokens=~%d",
+				sess.brain.GetModel(), sess.brain.GetProviderName(), sess.brain.EstimateTokens())
+		}
 		sess.AddMessage("assistant", fmt.Sprintf(`调试信息
 
 版本: %s
+模式: %s
 会话: %d/%d (%s)
 消息数: %d
 流式状态: %v
@@ -377,21 +440,22 @@ TUI:
 AI补全中: %v
 补全缓存: %d
 当前suggestion: %q
-大模型: %s
-小模型: %s
-供应商: %s
-已注册供应商: %s
-Token 估算: ~%d`,
+Brain: %s
+Daemon Session: %s`,
 			config.Version,
+			func() string {
+				if a.isDaemonMode() {
+					return "daemon"
+				}
+				return "standalone"
+			}(),
 			a.activeIdx+1, len(a.sessions), sess.name,
 			len(sess.messages), sess.streaming,
 			sess.eventChan != nil, len(sess.streamBuffer),
 			a.aiPending, len(a.completion.cache),
 			a.suggestion,
-			sess.brain.GetModel(), sess.brain.GetSmallModel(),
-			sess.brain.GetProviderName(),
-			strings.Join(sess.brain.ListProviders(), ", "),
-			sess.brain.EstimateTokens()))
+			brainInfo,
+			sess.daemonSessID))
 
 	case "/cron":
 		if a.scheduler == nil {
@@ -423,19 +487,25 @@ Token 估算: ~%d`,
 		}
 
 	case "/model-info":
-		info := sess.brain.GetProviderInfo()
-		var sb strings.Builder
-		sb.WriteString("模型详细信息\n\n")
-		sb.WriteString(fmt.Sprintf("  供应商:       %s\n", info["provider"]))
-		sb.WriteString(fmt.Sprintf("  当前模型:     %s\n", info["model"]))
-		sb.WriteString(fmt.Sprintf("  默认模型:     %s\n", info["defaultModel"]))
-		sb.WriteString(fmt.Sprintf("  小模型:       %s\n", info["smallModel"]))
-		sb.WriteString(fmt.Sprintf("  工具支持:     %s\n", info["supportsTools"]))
-		sb.WriteString(fmt.Sprintf("  已注册供应商: %s\n", strings.Join(sess.brain.ListProviders(), ", ")))
-		sess.AddMessage("assistant", sb.String())
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "daemon 模式下模型信息由 daemon 管理")
+		} else {
+			info := sess.brain.GetProviderInfo()
+			var sb strings.Builder
+			sb.WriteString("模型详细信息\n\n")
+			sb.WriteString(fmt.Sprintf("  供应商:       %s\n", info["provider"]))
+			sb.WriteString(fmt.Sprintf("  当前模型:     %s\n", info["model"]))
+			sb.WriteString(fmt.Sprintf("  默认模型:     %s\n", info["defaultModel"]))
+			sb.WriteString(fmt.Sprintf("  小模型:       %s\n", info["smallModel"]))
+			sb.WriteString(fmt.Sprintf("  工具支持:     %s\n", info["supportsTools"]))
+			sb.WriteString(fmt.Sprintf("  已注册供应商: %s\n", strings.Join(sess.brain.ListProviders(), ", ")))
+			sess.AddMessage("assistant", sb.String())
+		}
 
 	case "/load":
-		if len(args) == 0 {
+		if sess.brain == nil {
+			sess.AddMessage("assistant", "daemon 模式下会话由 daemon 管理")
+		} else if len(args) == 0 {
 			// 列出可加载的会话
 			memStore := sess.brain.GetMemoryStore()
 			if memStore == nil {
@@ -478,6 +548,41 @@ Token 估算: ~%d`,
 
 	default:
 		sess.AddMessage("assistant", fmt.Sprintf("未知命令: %s\n输入 /help 查看可用命令", cmd))
+	}
+
+	a.refreshViewport()
+}
+
+// handleDaemonCommand 转发命令到 daemon
+func (a *App) handleDaemonCommand(command string, args []string, fullCmd string) {
+	sess := a.currentSession()
+
+	// /clear 和 /reset 需要同时清理本地 TUI 消息
+	if command == "/clear" || command == "/reset" {
+		sess.messages = []Message{}
+		a.completion.ClearCache()
+		a.viewport.SetContent("")
+	}
+
+	output, quit, err := a.client.RunCommand(sess.daemonSessID, fullCmd)
+	if err != nil {
+		sess.AddMessage("assistant", fmt.Sprintf("命令执行失败: %v", err))
+		a.refreshViewport()
+		return
+	}
+
+	if output != "" {
+		sess.AddMessage("assistant", output)
+	}
+
+	// 如果 daemon 返回的 /model 命令成功，更新本地缓存
+	if command == "/model" && len(args) > 0 {
+		sess.model = strings.Join(args, " ")
+		a.updateStatus("Ready")
+	}
+
+	if quit {
+		a.quitting = true
 	}
 
 	a.refreshViewport()
