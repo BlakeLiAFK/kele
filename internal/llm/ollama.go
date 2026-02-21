@@ -2,9 +2,11 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"time"
+	"io"
 	"net/http"
+	"time"
 
 	"github.com/BlakeLiAFK/kele/internal/config"
 )
@@ -54,4 +56,40 @@ func (p *OllamaProvider) ChatStream(ctx context.Context, messages []Message, too
 		return nil, fmt.Errorf("Ollama 错误: %w (确认 Ollama 已运行: %s)", err, p.host)
 	}
 	return ch, nil
+}
+
+// ListModels 查询 Ollama 本地已安装的模型
+func (p *OllamaProvider) ListModels() ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", p.host+"/api/tags", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("无法连接 Ollama (%s): %w", p.host, err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Models []struct {
+			Name string `json:"name"`
+		} `json:"models"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return nil, err
+	}
+
+	var names []string
+	for _, m := range result.Models {
+		names = append(names, m.Name)
+	}
+	return names, nil
 }

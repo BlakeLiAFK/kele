@@ -14,16 +14,16 @@ import (
 
 	"github.com/BlakeLiAFK/kele/internal/config"
 	"github.com/BlakeLiAFK/kele/internal/cron"
-	"github.com/BlakeLiAFK/kele/internal/llm"
+	pb "github.com/BlakeLiAFK/kele/internal/proto"
 )
 
 // allCommands 所有可用命令
 var allCommands = []string{
 	"/help", "/clear", "/reset", "/exit", "/quit",
-	"/model", "/models", "/model-reset", "/model-small",
+	"/model", "/models", "/model-reset", "/model-small", "/model-info",
 	"/remember", "/search", "/memory",
 	"/status", "/config", "/history", "/tokens", "/tools",
-	"/save", "/export", "/debug",
+	"/save", "/export", "/load", "/debug",
 	"/new", "/sessions", "/switch", "/rename",
 	"/cron",
 }
@@ -41,7 +41,10 @@ type App struct {
 	// 全局配置
 	cfg *config.Config
 
-	// 全局调度器
+	// Daemon 客户端（nil = standalone 模式）
+	client *DaemonClient
+
+	// 全局调度器（standalone 模式）
 	scheduler *cron.Scheduler
 
 	// 多会话
@@ -110,7 +113,7 @@ type tickMsg struct{}
 // spinner 帧
 var spinnerFrames = []string{"\u28cb", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"}
 
-// NewApp 创建应用
+// NewApp 创建应用（standalone 模式）
 func NewApp(cfg *config.Config) *App {
 	ta := textarea.New()
 	ta.Placeholder = "输入消息... (Tab 补全, Ctrl+J 换行)"
@@ -138,6 +141,50 @@ func NewApp(cfg *config.Config) *App {
 	}
 	app.updateStatus("Ready")
 	return app
+}
+
+// NewAppWithClient 创建应用（daemon 模式，通过 gRPC 连接）
+func NewAppWithClient(cfg *config.Config, grpcClient pb.KeleServiceClient) *App {
+	ta := textarea.New()
+	ta.Placeholder = "输入消息... (Tab 补全, Ctrl+J 换行)"
+	ta.Focus()
+	ta.CharLimit = cfg.TUI.MaxInputChars
+	ta.SetHeight(3)
+	ta.ShowLineNumbers = false
+
+	dc := NewDaemonClient(grpcClient)
+
+	// 创建 daemon 侧的初始会话
+	info, err := dc.CreateSession("Chat 1")
+	var firstSession *Session
+	if err != nil {
+		// 回退：创建本地占位会话
+		firstSession = &Session{
+			id:         1,
+			name:       "Chat 1",
+			messages:   []Message{},
+			historyIdx: -1,
+		}
+	} else {
+		firstSession = NewDaemonSession(1, info.Name, info.Id, info.Model, info.Provider)
+	}
+
+	app := &App{
+		cfg:           cfg,
+		client:        dc,
+		sessions:      []*Session{firstSession},
+		activeIdx:     0,
+		nextSessionID: 2,
+		textarea:      ta,
+		completion:    NewCompletionEngineWithClient(dc, firstSession.daemonSessID),
+	}
+	app.updateStatus("Ready")
+	return app
+}
+
+// isDaemonMode 检查是否使用 daemon 模式
+func (a *App) isDaemonMode() bool {
+	return a.client != nil
 }
 
 // currentSession 获取当前活跃会话
@@ -172,7 +219,30 @@ func (a *App) shouldTick() bool {
 
 // Init 初始化
 func (a *App) Init() tea.Cmd {
+	// 仅 standalone 模式尝试恢复会话
+	if !a.isDaemonMode() {
+		a.tryRestoreSession()
+	}
 	return textarea.Blink
+}
+
+// tryRestoreSession 尝试恢复最近的会话（standalone 模式）
+func (a *App) tryRestoreSession() {
+	sess := a.currentSession()
+	if sess.brain == nil {
+		return
+	}
+	memStore := sess.brain.GetMemoryStore()
+	if memStore == nil {
+		return
+	}
+	latest, err := memStore.GetLatestSession()
+	if err != nil || latest == nil {
+		return
+	}
+	if latest.MessageCount > 0 {
+		sess.AddMessage("assistant", fmt.Sprintf("检测到上次会话: %s (%d 条消息)\n输入 /load %s 恢复", latest.ID, latest.MessageCount, latest.ID))
+	}
 }
 
 // Update 处理消息
@@ -353,7 +423,25 @@ func (a *App) handleEnter() tea.Cmd {
 func (a *App) startStream(userInput string) tea.Cmd {
 	sess := a.currentSession()
 	sessionID := sess.id
+
+	// Daemon 模式：通过 gRPC 客户端流式对话
+	if a.isDaemonMode() && sess.daemonSessID != "" {
+		daemonSessID := sess.daemonSessID
+		client := a.client
+		return func() tea.Msg {
+			eventChan, err := client.ChatStream(daemonSessID, userInput)
+			if err != nil {
+				return streamMsg{sessionID: sessionID, err: err}
+			}
+			return streamInitMsg{sessionID: sessionID, eventChan: eventChan}
+		}
+	}
+
+	// Standalone 模式：直接调用 brain
 	return func() tea.Msg {
+		if sess.brain == nil {
+			return streamMsg{sessionID: sessionID, err: errors.New("brain not initialized")}
+		}
 		eventChan, err := sess.brain.ChatStream(userInput)
 		if err != nil {
 			return streamMsg{sessionID: sessionID, err: err}
@@ -549,15 +637,7 @@ func (a *App) onInputChanged(input string) tea.Cmd {
 
 	// AI 补全
 	if len(suggestions) == 0 && len(candidates) == 0 {
-		sess := a.currentSession()
-		history := sess.brain.GetHistory()
-		var recent []llm.Message
-		if len(history) > 4 {
-			recent = history[len(history)-4:]
-		} else {
-			recent = history
-		}
-		aiCmd := a.completion.AIComplete(input, recent)
+		aiCmd := a.completion.AIComplete(input, nil)
 		if aiCmd != nil {
 			a.aiPending = true
 			a.completionState = "loading"
@@ -575,18 +655,9 @@ func (a *App) forceComplete() tea.Cmd {
 		return nil
 	}
 
-	sess := a.currentSession()
-	history := sess.brain.GetHistory()
-	var recent []llm.Message
-	if len(history) > 4 {
-		recent = history[len(history)-4:]
-	} else {
-		recent = history
-	}
-
 	a.completionState = "loading"
 	a.aiPending = true
-	cmd := a.completion.ForceComplete(input, recent)
+	cmd := a.completion.ForceComplete(input, nil)
 	if cmd != nil {
 		return tea.Batch(cmd, tick())
 	}
@@ -634,8 +705,29 @@ func (a *App) createSession(name string) {
 		a.refreshViewport()
 		return
 	}
+
 	id := a.nextSessionID
 	a.nextSessionID++
+
+	if a.isDaemonMode() {
+		sessName := name
+		if sessName == "" {
+			sessName = fmt.Sprintf("Chat %d", id)
+		}
+		info, err := a.client.CreateSession(sessName)
+		if err != nil {
+			a.currentSession().AddMessage("assistant", fmt.Sprintf("创建会话失败: %v", err))
+			a.refreshViewport()
+			return
+		}
+		s := NewDaemonSession(id, info.Name, info.Id, info.Model, info.Provider)
+		a.sessions = append(a.sessions, s)
+		a.switchSession(len(a.sessions) - 1)
+		a.updateStatus(fmt.Sprintf("新建会话: %s", s.name))
+		return
+	}
+
+	// Standalone 模式
 	s := NewSession(id, a.scheduler, a.cfg)
 	if name != "" {
 		s.name = name
@@ -659,7 +751,13 @@ func (a *App) switchSession(idx int) {
 	// 恢复目标会话的输入框内容
 	a.textarea.SetValue(sess.draftInput)
 	a.textarea.CursorEnd()
-	a.completion = NewCompletionEngine(sess.brain)
+
+	// 更新补全引擎
+	if a.isDaemonMode() {
+		a.completion = NewCompletionEngineWithClient(a.client, sess.daemonSessID)
+	} else {
+		a.completion = NewCompletionEngine(sess.brain)
+	}
 	a.completionHint = ""
 	a.suggestion = ""
 	a.updateStatus("Ready")
@@ -673,7 +771,15 @@ func (a *App) closeSession() {
 		a.refreshViewport()
 		return
 	}
+
+	closedSess := a.currentSession()
 	closedIdx := a.activeIdx
+
+	// Daemon 模式：通知 daemon 删除会话
+	if a.isDaemonMode() && closedSess.daemonSessID != "" {
+		a.client.DeleteSession(closedSess.daemonSessID)
+	}
+
 	a.sessions = append(a.sessions[:closedIdx], a.sessions[closedIdx+1:]...)
 	// 优先切到左边
 	newIdx := closedIdx - 1
@@ -685,7 +791,11 @@ func (a *App) closeSession() {
 	sess := a.currentSession()
 	a.textarea.SetValue(sess.draftInput)
 	a.textarea.CursorEnd()
-	a.completion = NewCompletionEngine(sess.brain)
+	if a.isDaemonMode() {
+		a.completion = NewCompletionEngineWithClient(a.client, sess.daemonSessID)
+	} else {
+		a.completion = NewCompletionEngine(sess.brain)
+	}
 	a.completionHint = ""
 	a.suggestion = ""
 	a.updateStatus("Ready")
@@ -702,6 +812,23 @@ func (a *App) refreshViewport() {
 // updateStatus 更新状态栏
 func (a *App) updateStatus(status string) {
 	sess := a.currentSession()
-	a.statusContent = fmt.Sprintf("Kele v%s | %s (%s) | %s",
-		config.Version, sess.brain.GetModel(), sess.brain.GetProviderName(), status)
+	if a.isDaemonMode() {
+		model := sess.model
+		provider := sess.provider
+		if model == "" {
+			model = "unknown"
+		}
+		if provider == "" {
+			provider = "daemon"
+		}
+		a.statusContent = fmt.Sprintf("Kele v%s | %s (%s) | %s",
+			config.Version, model, provider, status)
+		return
+	}
+	if sess.brain != nil {
+		a.statusContent = fmt.Sprintf("Kele v%s | %s (%s) | %s",
+			config.Version, sess.brain.GetModel(), sess.brain.GetProviderName(), status)
+	} else {
+		a.statusContent = fmt.Sprintf("Kele v%s | %s", config.Version, status)
+	}
 }

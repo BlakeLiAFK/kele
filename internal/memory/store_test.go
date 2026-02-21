@@ -18,7 +18,11 @@ func testStore(t *testing.T) *Store {
 			SessionDir: filepath.Join(dir, "sessions"),
 		},
 	}
-	return NewStore(cfg)
+	store, err := NewStore(cfg)
+	if err != nil {
+		t.Fatalf("NewStore 失败: %v", err)
+	}
+	return store
 }
 
 func TestSaveAndGetMessage(t *testing.T) {
@@ -211,4 +215,47 @@ func TestLoadSessionNotFound(t *testing.T) {
 	if err == nil {
 		t.Error("加载不存在的会话应报错")
 	}
+}
+
+func TestGetRecentMemories(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+
+	store.UpdateMemory("lang", "Go is great")
+	store.UpdateMemory("editor", "VSCode is popular")
+
+	memories, err := store.GetRecentMemories(5)
+	if err != nil {
+		t.Fatalf("GetRecentMemories 失败: %v", err)
+	}
+	if len(memories) != 2 {
+		t.Errorf("应有 2 条记忆, 实际 %d", len(memories))
+	}
+}
+
+func TestGetLatestSession(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+
+	store.SaveSession("s1", []Message{{Role: "user", Content: "hello"}})
+	store.SaveSession("s2", []Message{{Role: "user", Content: "world"}})
+
+	latest, err := store.GetLatestSession()
+	if err != nil {
+		t.Fatalf("GetLatestSession 失败: %v", err)
+	}
+	if latest == nil {
+		t.Fatal("应有最近会话")
+	}
+	if latest.MessageCount != 1 {
+		t.Errorf("最近会话应有 1 条消息, 实际 %d", latest.MessageCount)
+	}
+}
+
+func TestHasFTS5(t *testing.T) {
+	store := testStore(t)
+	defer store.Close()
+
+	// FTS5 可能可用也可能不可用，仅验证不 panic
+	_ = store.HasFTS5()
 }

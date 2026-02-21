@@ -21,6 +21,7 @@ type Executor struct {
 	scheduler *cron.Scheduler
 	registry  *Registry
 	cfg       *config.Config
+	audit     *AuditLogger
 }
 
 // NewExecutor 创建执行器
@@ -32,6 +33,7 @@ func NewExecutor(scheduler *cron.Scheduler, cfg *config.Config) *Executor {
 		scheduler: scheduler,
 		registry:  NewRegistry(),
 		cfg:       cfg,
+		audit:     NewAuditLogger(cfg.Memory.AuditLog),
 	}
 
 	// 注册内置工具
@@ -61,7 +63,7 @@ func (e *Executor) GetTools() []llm.Tool {
 	return tools
 }
 
-// Execute 执行工具调用
+// Execute 执行工具调用（带审计日志）
 func (e *Executor) Execute(toolCall llm.ToolCall) (string, error) {
 	var args map[string]interface{}
 	if err := json.Unmarshal([]byte(toolCall.Function.Arguments), &args); err != nil {
@@ -69,25 +71,34 @@ func (e *Executor) Execute(toolCall llm.ToolCall) (string, error) {
 	}
 
 	name := toolCall.Function.Name
+	start := time.Now()
+
+	var result string
+	var execErr error
 
 	if e.registry.Has(name) {
-		return e.registry.Execute(name, args)
+		result, execErr = e.registry.Execute(name, args)
+	} else {
+		switch name {
+		case "cron_create":
+			result, execErr = e.executeCronCreate(args)
+		case "cron_list":
+			result, execErr = e.executeCronList()
+		case "cron_get":
+			result, execErr = e.executeCronGet(args)
+		case "cron_update":
+			result, execErr = e.executeCronUpdate(args)
+		case "cron_delete":
+			result, execErr = e.executeCronDelete(args)
+		default:
+			execErr = fmt.Errorf("未知工具: %s", name)
+		}
 	}
 
-	switch name {
-	case "cron_create":
-		return e.executeCronCreate(args)
-	case "cron_list":
-		return e.executeCronList()
-	case "cron_get":
-		return e.executeCronGet(args)
-	case "cron_update":
-		return e.executeCronUpdate(args)
-	case "cron_delete":
-		return e.executeCronDelete(args)
-	default:
-		return "", fmt.Errorf("未知工具: %s", name)
-	}
+	// 审计日志
+	e.audit.Log(name, args, result, execErr, time.Since(start))
+
+	return result, execErr
 }
 
 // ListTools 列出所有工具名

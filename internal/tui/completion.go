@@ -20,20 +20,37 @@ type completionMsg struct {
 
 // CompletionEngine 补全引擎
 type CompletionEngine struct {
-	brain      *agent.Brain
-	debounceMs int
-	mu         sync.Mutex
-	cache      map[string]string
-	lastInput  string
+	brain           *agent.Brain  // standalone 模式
+	daemonClient    *DaemonClient // daemon 模式
+	daemonSessionID string        // daemon 模式下的会话 ID
+	debounceMs      int
+	mu              sync.Mutex
+	cache           map[string]string
+	lastInput       string
 }
 
-// NewCompletionEngine 创建补全引擎
+// NewCompletionEngine 创建补全引擎（standalone 模式）
 func NewCompletionEngine(brain *agent.Brain) *CompletionEngine {
 	return &CompletionEngine{
 		brain:      brain,
 		debounceMs: 500,
 		cache:      make(map[string]string),
 	}
+}
+
+// NewCompletionEngineWithClient 创建补全引擎（daemon 模式）
+func NewCompletionEngineWithClient(client *DaemonClient, sessionID string) *CompletionEngine {
+	return &CompletionEngine{
+		daemonClient:    client,
+		daemonSessionID: sessionID,
+		debounceMs:      500,
+		cache:           make(map[string]string),
+	}
+}
+
+// isDaemonMode 是否使用 daemon 模式补全
+func (e *CompletionEngine) isDaemonMode() bool {
+	return e.daemonClient != nil
 }
 
 // LocalComplete 本地即时补全（斜杠命令 + @文件路径）
@@ -107,6 +124,7 @@ func (e *CompletionEngine) completeSlashCommand(input string) (suggestions []str
 }
 
 // AIComplete 异步 AI 补全（返回 tea.Cmd，带防抖）
+// history 参数在 daemon 模式下被忽略（daemon 自行管理历史）
 func (e *CompletionEngine) AIComplete(input string, history []llm.Message) tea.Cmd {
 	if input == "" || strings.HasPrefix(input, "/") || strings.Contains(input, "@") {
 		return nil
@@ -130,6 +148,32 @@ func (e *CompletionEngine) AIComplete(input string, history []llm.Message) tea.C
 
 	// 防抖：延迟后请求
 	debounce := time.Duration(e.debounceMs) * time.Millisecond
+
+	if e.isDaemonMode() {
+		client := e.daemonClient
+		sessID := e.daemonSessionID
+		return func() tea.Msg {
+			time.Sleep(debounce)
+
+			e.mu.Lock()
+			if e.lastInput != input {
+				e.mu.Unlock()
+				return completionMsg{input: input}
+			}
+			e.mu.Unlock()
+
+			result, err := client.Complete(sessID, input)
+			if err != nil {
+				return completionMsg{input: input, err: err}
+			}
+			return e.processResult(input, result)
+		}
+	}
+
+	// Standalone 模式
+	if e.brain == nil {
+		return nil
+	}
 	return func() tea.Msg {
 		time.Sleep(debounce)
 
@@ -137,7 +181,7 @@ func (e *CompletionEngine) AIComplete(input string, history []llm.Message) tea.C
 		e.mu.Lock()
 		if e.lastInput != input {
 			e.mu.Unlock()
-			return completionMsg{input: input} // 取消也要返回消息，清理 loading 状态
+			return completionMsg{input: input}
 		}
 		e.mu.Unlock()
 
@@ -146,31 +190,7 @@ func (e *CompletionEngine) AIComplete(input string, history []llm.Message) tea.C
 		if err != nil {
 			return completionMsg{input: input, err: err}
 		}
-		if result == "" {
-			return completionMsg{input: input}
-		}
-
-		// 确保返回值以当前输入为前缀
-		if !strings.HasPrefix(result, input) {
-			// 模型没遵循指令，尝试拼接
-			result = input + result
-		}
-
-		// 结果与输入相同则无意义
-		if strings.TrimSpace(result) == strings.TrimSpace(input) {
-			return completionMsg{input: input}
-		}
-
-		// 缓存
-		e.mu.Lock()
-		e.cache[input] = result
-		// 缓存上限
-		if len(e.cache) > 100 {
-			e.cache = make(map[string]string)
-		}
-		e.mu.Unlock()
-
-		return completionMsg{input: input, suggestion: result}
+		return e.processResult(input, result)
 	}
 }
 
@@ -190,30 +210,56 @@ func (e *CompletionEngine) ForceComplete(input string, history []llm.Message) te
 	}
 	e.mu.Unlock()
 
+	if e.isDaemonMode() {
+		client := e.daemonClient
+		sessID := e.daemonSessionID
+		return func() tea.Msg {
+			result, err := client.Complete(sessID, input)
+			if err != nil {
+				return completionMsg{input: input, err: err}
+			}
+			return e.processResult(input, result)
+		}
+	}
+
+	// Standalone 模式
+	if e.brain == nil {
+		return nil
+	}
 	return func() tea.Msg {
 		result, err := e.brain.Complete(input, history)
 		if err != nil {
 			return completionMsg{input: input, err: err}
 		}
-		if result == "" {
-			return completionMsg{input: input}
-		}
-		if !strings.HasPrefix(result, input) {
-			result = input + result
-		}
-		if strings.TrimSpace(result) == strings.TrimSpace(input) {
-			return completionMsg{input: input}
-		}
-
-		e.mu.Lock()
-		e.cache[input] = result
-		if len(e.cache) > 100 {
-			e.cache = make(map[string]string)
-		}
-		e.mu.Unlock()
-
-		return completionMsg{input: input, suggestion: result}
+		return e.processResult(input, result)
 	}
+}
+
+// processResult 处理补全结果（缓存 + 格式化）
+func (e *CompletionEngine) processResult(input, result string) completionMsg {
+	if result == "" {
+		return completionMsg{input: input}
+	}
+
+	// 确保返回值以当前输入为前缀
+	if !strings.HasPrefix(result, input) {
+		result = input + result
+	}
+
+	// 结果与输入相同则无意义
+	if strings.TrimSpace(result) == strings.TrimSpace(input) {
+		return completionMsg{input: input}
+	}
+
+	// 缓存
+	e.mu.Lock()
+	e.cache[input] = result
+	if len(e.cache) > 100 {
+		e.cache = make(map[string]string)
+	}
+	e.mu.Unlock()
+
+	return completionMsg{input: input, suggestion: result}
 }
 
 // ClearCache 清理缓存

@@ -13,7 +13,10 @@ type Session struct {
 	id           int
 	name         string
 	messages     []Message
-	brain        *agent.Brain
+	brain        *agent.Brain // standalone mode only (nil in daemon mode)
+	daemonSessID string       // daemon session ID (empty in standalone mode)
+	model        string       // cached model name (daemon mode)
+	provider     string       // cached provider name (daemon mode)
 	streaming       bool
 	streamBuffer    string
 	thinkingBuffer  string // 流式推理内容缓冲
@@ -29,7 +32,7 @@ type Session struct {
 	taskRunning bool
 }
 
-// NewSession 创建新会话
+// NewSession 创建新会话（standalone 模式）
 func NewSession(id int, scheduler *cron.Scheduler, cfg *config.Config) *Session {
 	return &Session{
 		id:         id,
@@ -38,6 +41,24 @@ func NewSession(id int, scheduler *cron.Scheduler, cfg *config.Config) *Session 
 		brain:      agent.NewBrain(scheduler, cfg),
 		historyIdx: -1,
 	}
+}
+
+// NewDaemonSession 创建新会话（daemon 模式）
+func NewDaemonSession(localID int, name, daemonSessionID, model, provider string) *Session {
+	return &Session{
+		id:           localID,
+		name:         name,
+		messages:     []Message{},
+		daemonSessID: daemonSessionID,
+		model:        model,
+		provider:     provider,
+		historyIdx:   -1,
+	}
+}
+
+// IsDaemonMode 检查是否为 daemon 模式
+func (s *Session) IsDaemonMode() bool {
+	return s.daemonSessID != ""
 }
 
 // AddMessage 添加消息

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BlakeLiAFK/kele/internal/config"
 )
@@ -86,7 +87,7 @@ func NewProviderManager(cfg *config.Config) *ProviderManager {
 	return pm
 }
 
-// Chat 非流式聊天
+// Chat 非流式聊天（带自动重试）
 func (pm *ProviderManager) Chat(messages []Message, tools []Tool) (*ChatResponse, error) {
 	pm.mu.RLock()
 	provider := pm.activeProvider
@@ -97,14 +98,31 @@ func (pm *ProviderManager) Chat(messages []Message, tools []Tool) (*ChatResponse
 		return nil, fmt.Errorf("未配置任何 LLM 供应商，请设置 OPENAI_API_KEY 或 ANTHROPIC_API_KEY")
 	}
 
-	return provider.Chat(context.Background(), messages, tools, ChatOptions{
+	opts := ChatOptions{
 		Model:       model,
 		Temperature: pm.cfg.LLM.Temperature,
 		MaxTokens:   pm.cfg.LLM.MaxTokens,
-	})
+	}
+
+	// 自动重试：最多 3 次，指数退避
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		resp, err := provider.Chat(context.Background(), messages, tools, opts)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		if !isRetryableError(err) {
+			return nil, err
+		}
+		// 指数退避：1s, 2s, 4s
+		backoff := time.Duration(1<<uint(attempt)) * time.Second
+		time.Sleep(backoff)
+	}
+	return nil, fmt.Errorf("重试 3 次后仍失败: %w", lastErr)
 }
 
-// ChatStream 流式聊天
+// ChatStream 流式聊天（带自动重试）
 func (pm *ProviderManager) ChatStream(messages []Message, tools []Tool) <-chan StreamEvent {
 	pm.mu.RLock()
 	provider := pm.activeProvider
@@ -118,18 +136,34 @@ func (pm *ProviderManager) ChatStream(messages []Message, tools []Tool) <-chan S
 		return ch
 	}
 
-	ch, err := provider.ChatStream(context.Background(), messages, tools, ChatOptions{
+	opts := ChatOptions{
 		Model:       model,
 		Temperature: pm.cfg.LLM.Temperature,
 		MaxTokens:   pm.cfg.LLM.MaxTokens,
-	})
-	if err != nil {
-		errCh := make(chan StreamEvent, 1)
-		errCh <- StreamEvent{Type: "error", Error: err}
-		close(errCh)
-		return errCh
 	}
-	return ch
+
+	// 自动重试
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		ch, err := provider.ChatStream(context.Background(), messages, tools, opts)
+		if err == nil {
+			return ch
+		}
+		lastErr = err
+		if !isRetryableError(err) {
+			errCh := make(chan StreamEvent, 1)
+			errCh <- StreamEvent{Type: "error", Error: err}
+			close(errCh)
+			return errCh
+		}
+		backoff := time.Duration(1<<uint(attempt)) * time.Second
+		time.Sleep(backoff)
+	}
+
+	errCh := make(chan StreamEvent, 1)
+	errCh <- StreamEvent{Type: "error", Error: fmt.Errorf("重试 3 次后仍失败: %w", lastErr)}
+	close(errCh)
+	return errCh
 }
 
 // Complete 快速补全（使用小模型）
@@ -220,6 +254,16 @@ func (pm *ProviderManager) GetActiveProviderName() string {
 	return "none"
 }
 
+// ActiveSupportsTools 当前活跃供应商是否支持工具调用
+func (pm *ProviderManager) ActiveSupportsTools() bool {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	if pm.activeProvider != nil {
+		return pm.activeProvider.SupportsTools()
+	}
+	return false
+}
+
 // ListProviders 列出所有已注册供应商
 func (pm *ProviderManager) ListProviders() []string {
 	pm.mu.RLock()
@@ -276,4 +320,27 @@ func (pm *ProviderManager) resolveProvider(model string) Provider {
 		return p
 	}
 	return nil
+}
+
+// isRetryableError 判断错误是否可重试
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	// 网络错误
+	if strings.Contains(msg, "网络错误") || strings.Contains(msg, "connection") ||
+		strings.Contains(msg, "timeout") || strings.Contains(msg, "EOF") {
+		return true
+	}
+	// 429 限流
+	if strings.Contains(msg, "频率超限") || strings.Contains(msg, "429") {
+		return true
+	}
+	// 5xx 服务器错误
+	if strings.Contains(msg, "服务暂时不可用") || strings.Contains(msg, "500") ||
+		strings.Contains(msg, "502") || strings.Contains(msg, "503") {
+		return true
+	}
+	return false
 }

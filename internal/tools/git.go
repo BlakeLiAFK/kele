@@ -118,6 +118,10 @@ func (t *GitTool) Execute(args map[string]interface{}) (string, error) {
 		if t.maxOutputSize > 0 && len(result) > t.maxOutputSize {
 			result = result[:t.maxOutputSize] + fmt.Sprintf("\n\n... [输出被截断，超过 %d 字节]", t.maxOutputSize)
 		}
+		// diff 输出添加语法高亮标记
+		if subcommand == "diff" || subcommand == "show" {
+			result = highlightDiff(result)
+		}
 		if err != nil {
 			return result, nil // Git 命令有时以非零退出码返回有效信息（如 diff）
 		}
@@ -128,4 +132,30 @@ func (t *GitTool) Execute(args map[string]interface{}) (string, error) {
 		}
 		return "", fmt.Errorf("Git 命令执行超时")
 	}
+}
+
+// highlightDiff 为 diff 输出添加 ANSI 颜色
+func highlightDiff(input string) string {
+	lines := strings.Split(input, "\n")
+	var sb strings.Builder
+	for _, line := range lines {
+		switch {
+		case strings.HasPrefix(line, "+++ ") || strings.HasPrefix(line, "--- "):
+			sb.WriteString("\033[1m" + line + "\033[0m\n") // 粗体
+		case strings.HasPrefix(line, "+"):
+			sb.WriteString("\033[32m" + line + "\033[0m\n") // 绿色
+		case strings.HasPrefix(line, "-"):
+			sb.WriteString("\033[31m" + line + "\033[0m\n") // 红色
+		case strings.HasPrefix(line, "@@"):
+			sb.WriteString("\033[36m" + line + "\033[0m\n") // 青色
+		default:
+			sb.WriteString(line + "\n")
+		}
+	}
+	// 去掉末尾多余换行
+	result := sb.String()
+	if len(result) > 0 && result[len(result)-1] == '\n' {
+		result = result[:len(result)-1]
+	}
+	return result
 }
