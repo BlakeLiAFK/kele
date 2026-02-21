@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v5.28.3
-// source: kele.proto
+// source: proto/kele.proto
 
 package proto
 
@@ -27,6 +27,24 @@ const (
 	KeleService_ListSessions_FullMethodName       = "/kele.KeleService/ListSessions"
 	KeleService_GetStatus_FullMethodName          = "/kele.KeleService/GetStatus"
 	KeleService_GetHeartbeatStatus_FullMethodName = "/kele.KeleService/GetHeartbeatStatus"
+	KeleService_CreateWorkspace_FullMethodName    = "/kele.KeleService/CreateWorkspace"
+	KeleService_GetWorkspace_FullMethodName       = "/kele.KeleService/GetWorkspace"
+	KeleService_UpdateWorkspace_FullMethodName    = "/kele.KeleService/UpdateWorkspace"
+	KeleService_DeleteWorkspace_FullMethodName    = "/kele.KeleService/DeleteWorkspace"
+	KeleService_ListWorkspaces_FullMethodName     = "/kele.KeleService/ListWorkspaces"
+	KeleService_CreateTask_FullMethodName         = "/kele.KeleService/CreateTask"
+	KeleService_GetTask_FullMethodName            = "/kele.KeleService/GetTask"
+	KeleService_UpdateTaskRPC_FullMethodName      = "/kele.KeleService/UpdateTaskRPC"
+	KeleService_DeleteTask_FullMethodName         = "/kele.KeleService/DeleteTask"
+	KeleService_ListTasks_FullMethodName          = "/kele.KeleService/ListTasks"
+	KeleService_StartTask_FullMethodName          = "/kele.KeleService/StartTask"
+	KeleService_CancelTask_FullMethodName         = "/kele.KeleService/CancelTask"
+	KeleService_RetryTask_FullMethodName          = "/kele.KeleService/RetryTask"
+	KeleService_PlanWorkspace_FullMethodName      = "/kele.KeleService/PlanWorkspace"
+	KeleService_ApprovePlan_FullMethodName        = "/kele.KeleService/ApprovePlan"
+	KeleService_GetBoardOverview_FullMethodName   = "/kele.KeleService/GetBoardOverview"
+	KeleService_WatchBoard_FullMethodName         = "/kele.KeleService/WatchBoard"
+	KeleService_GetTaskLog_FullMethodName         = "/kele.KeleService/GetTaskLog"
 )
 
 // KeleServiceClient is the client API for KeleService service.
@@ -52,6 +70,24 @@ type KeleServiceClient interface {
 	GetStatus(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*StatusResponse, error)
 	// GetHeartbeatStatus returns heartbeat system status.
 	GetHeartbeatStatus(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*HeartbeatStatusResponse, error)
+	CreateWorkspace(ctx context.Context, in *CreateWorkspaceRequest, opts ...grpc.CallOption) (*WorkspaceInfo, error)
+	GetWorkspace(ctx context.Context, in *GetWorkspaceRequest, opts ...grpc.CallOption) (*WorkspaceInfo, error)
+	UpdateWorkspace(ctx context.Context, in *UpdateWorkspaceRequest, opts ...grpc.CallOption) (*WorkspaceInfo, error)
+	DeleteWorkspace(ctx context.Context, in *DeleteWorkspaceRequest, opts ...grpc.CallOption) (*Empty, error)
+	ListWorkspaces(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ListWorkspacesResponse, error)
+	CreateTask(ctx context.Context, in *CreateTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error)
+	GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error)
+	UpdateTaskRPC(ctx context.Context, in *UpdateTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error)
+	DeleteTask(ctx context.Context, in *DeleteTaskRequest, opts ...grpc.CallOption) (*Empty, error)
+	ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error)
+	StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error)
+	CancelTask(ctx context.Context, in *CancelTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error)
+	RetryTask(ctx context.Context, in *RetryTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error)
+	PlanWorkspace(ctx context.Context, in *PlanWorkspaceRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PlanEventMsg], error)
+	ApprovePlan(ctx context.Context, in *ApprovePlanRequest, opts ...grpc.CallOption) (*ApprovePlanResponse, error)
+	GetBoardOverview(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*BoardOverviewMsg, error)
+	WatchBoard(ctx context.Context, in *WatchBoardRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BoardEventMsg], error)
+	GetTaskLog(ctx context.Context, in *GetTaskLogRequest, opts ...grpc.CallOption) (*TaskLogResponse, error)
 }
 
 type keleServiceClient struct {
@@ -151,6 +187,204 @@ func (c *keleServiceClient) GetHeartbeatStatus(ctx context.Context, in *Empty, o
 	return out, nil
 }
 
+func (c *keleServiceClient) CreateWorkspace(ctx context.Context, in *CreateWorkspaceRequest, opts ...grpc.CallOption) (*WorkspaceInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WorkspaceInfo)
+	err := c.cc.Invoke(ctx, KeleService_CreateWorkspace_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) GetWorkspace(ctx context.Context, in *GetWorkspaceRequest, opts ...grpc.CallOption) (*WorkspaceInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WorkspaceInfo)
+	err := c.cc.Invoke(ctx, KeleService_GetWorkspace_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) UpdateWorkspace(ctx context.Context, in *UpdateWorkspaceRequest, opts ...grpc.CallOption) (*WorkspaceInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(WorkspaceInfo)
+	err := c.cc.Invoke(ctx, KeleService_UpdateWorkspace_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) DeleteWorkspace(ctx context.Context, in *DeleteWorkspaceRequest, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, KeleService_DeleteWorkspace_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) ListWorkspaces(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*ListWorkspacesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListWorkspacesResponse)
+	err := c.cc.Invoke(ctx, KeleService_ListWorkspaces_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) CreateTask(ctx context.Context, in *CreateTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskInfo)
+	err := c.cc.Invoke(ctx, KeleService_CreateTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskInfo)
+	err := c.cc.Invoke(ctx, KeleService_GetTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) UpdateTaskRPC(ctx context.Context, in *UpdateTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskInfo)
+	err := c.cc.Invoke(ctx, KeleService_UpdateTaskRPC_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) DeleteTask(ctx context.Context, in *DeleteTaskRequest, opts ...grpc.CallOption) (*Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Empty)
+	err := c.cc.Invoke(ctx, KeleService_DeleteTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) ListTasks(ctx context.Context, in *ListTasksRequest, opts ...grpc.CallOption) (*ListTasksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListTasksResponse)
+	err := c.cc.Invoke(ctx, KeleService_ListTasks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) StartTask(ctx context.Context, in *StartTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskInfo)
+	err := c.cc.Invoke(ctx, KeleService_StartTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) CancelTask(ctx context.Context, in *CancelTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskInfo)
+	err := c.cc.Invoke(ctx, KeleService_CancelTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) RetryTask(ctx context.Context, in *RetryTaskRequest, opts ...grpc.CallOption) (*TaskInfo, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskInfo)
+	err := c.cc.Invoke(ctx, KeleService_RetryTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) PlanWorkspace(ctx context.Context, in *PlanWorkspaceRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PlanEventMsg], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &KeleService_ServiceDesc.Streams[1], KeleService_PlanWorkspace_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[PlanWorkspaceRequest, PlanEventMsg]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KeleService_PlanWorkspaceClient = grpc.ServerStreamingClient[PlanEventMsg]
+
+func (c *keleServiceClient) ApprovePlan(ctx context.Context, in *ApprovePlanRequest, opts ...grpc.CallOption) (*ApprovePlanResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApprovePlanResponse)
+	err := c.cc.Invoke(ctx, KeleService_ApprovePlan_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) GetBoardOverview(ctx context.Context, in *Empty, opts ...grpc.CallOption) (*BoardOverviewMsg, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BoardOverviewMsg)
+	err := c.cc.Invoke(ctx, KeleService_GetBoardOverview_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *keleServiceClient) WatchBoard(ctx context.Context, in *WatchBoardRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[BoardEventMsg], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &KeleService_ServiceDesc.Streams[2], KeleService_WatchBoard_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchBoardRequest, BoardEventMsg]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KeleService_WatchBoardClient = grpc.ServerStreamingClient[BoardEventMsg]
+
+func (c *keleServiceClient) GetTaskLog(ctx context.Context, in *GetTaskLogRequest, opts ...grpc.CallOption) (*TaskLogResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(TaskLogResponse)
+	err := c.cc.Invoke(ctx, KeleService_GetTaskLog_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // KeleServiceServer is the server API for KeleService service.
 // All implementations must embed UnimplementedKeleServiceServer
 // for forward compatibility.
@@ -174,6 +408,24 @@ type KeleServiceServer interface {
 	GetStatus(context.Context, *Empty) (*StatusResponse, error)
 	// GetHeartbeatStatus returns heartbeat system status.
 	GetHeartbeatStatus(context.Context, *Empty) (*HeartbeatStatusResponse, error)
+	CreateWorkspace(context.Context, *CreateWorkspaceRequest) (*WorkspaceInfo, error)
+	GetWorkspace(context.Context, *GetWorkspaceRequest) (*WorkspaceInfo, error)
+	UpdateWorkspace(context.Context, *UpdateWorkspaceRequest) (*WorkspaceInfo, error)
+	DeleteWorkspace(context.Context, *DeleteWorkspaceRequest) (*Empty, error)
+	ListWorkspaces(context.Context, *Empty) (*ListWorkspacesResponse, error)
+	CreateTask(context.Context, *CreateTaskRequest) (*TaskInfo, error)
+	GetTask(context.Context, *GetTaskRequest) (*TaskInfo, error)
+	UpdateTaskRPC(context.Context, *UpdateTaskRequest) (*TaskInfo, error)
+	DeleteTask(context.Context, *DeleteTaskRequest) (*Empty, error)
+	ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error)
+	StartTask(context.Context, *StartTaskRequest) (*TaskInfo, error)
+	CancelTask(context.Context, *CancelTaskRequest) (*TaskInfo, error)
+	RetryTask(context.Context, *RetryTaskRequest) (*TaskInfo, error)
+	PlanWorkspace(*PlanWorkspaceRequest, grpc.ServerStreamingServer[PlanEventMsg]) error
+	ApprovePlan(context.Context, *ApprovePlanRequest) (*ApprovePlanResponse, error)
+	GetBoardOverview(context.Context, *Empty) (*BoardOverviewMsg, error)
+	WatchBoard(*WatchBoardRequest, grpc.ServerStreamingServer[BoardEventMsg]) error
+	GetTaskLog(context.Context, *GetTaskLogRequest) (*TaskLogResponse, error)
 	mustEmbedUnimplementedKeleServiceServer()
 }
 
@@ -207,6 +459,60 @@ func (UnimplementedKeleServiceServer) GetStatus(context.Context, *Empty) (*Statu
 }
 func (UnimplementedKeleServiceServer) GetHeartbeatStatus(context.Context, *Empty) (*HeartbeatStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetHeartbeatStatus not implemented")
+}
+func (UnimplementedKeleServiceServer) CreateWorkspace(context.Context, *CreateWorkspaceRequest) (*WorkspaceInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateWorkspace not implemented")
+}
+func (UnimplementedKeleServiceServer) GetWorkspace(context.Context, *GetWorkspaceRequest) (*WorkspaceInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWorkspace not implemented")
+}
+func (UnimplementedKeleServiceServer) UpdateWorkspace(context.Context, *UpdateWorkspaceRequest) (*WorkspaceInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateWorkspace not implemented")
+}
+func (UnimplementedKeleServiceServer) DeleteWorkspace(context.Context, *DeleteWorkspaceRequest) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteWorkspace not implemented")
+}
+func (UnimplementedKeleServiceServer) ListWorkspaces(context.Context, *Empty) (*ListWorkspacesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListWorkspaces not implemented")
+}
+func (UnimplementedKeleServiceServer) CreateTask(context.Context, *CreateTaskRequest) (*TaskInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateTask not implemented")
+}
+func (UnimplementedKeleServiceServer) GetTask(context.Context, *GetTaskRequest) (*TaskInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTask not implemented")
+}
+func (UnimplementedKeleServiceServer) UpdateTaskRPC(context.Context, *UpdateTaskRequest) (*TaskInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateTaskRPC not implemented")
+}
+func (UnimplementedKeleServiceServer) DeleteTask(context.Context, *DeleteTaskRequest) (*Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteTask not implemented")
+}
+func (UnimplementedKeleServiceServer) ListTasks(context.Context, *ListTasksRequest) (*ListTasksResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListTasks not implemented")
+}
+func (UnimplementedKeleServiceServer) StartTask(context.Context, *StartTaskRequest) (*TaskInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method StartTask not implemented")
+}
+func (UnimplementedKeleServiceServer) CancelTask(context.Context, *CancelTaskRequest) (*TaskInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelTask not implemented")
+}
+func (UnimplementedKeleServiceServer) RetryTask(context.Context, *RetryTaskRequest) (*TaskInfo, error) {
+	return nil, status.Error(codes.Unimplemented, "method RetryTask not implemented")
+}
+func (UnimplementedKeleServiceServer) PlanWorkspace(*PlanWorkspaceRequest, grpc.ServerStreamingServer[PlanEventMsg]) error {
+	return status.Error(codes.Unimplemented, "method PlanWorkspace not implemented")
+}
+func (UnimplementedKeleServiceServer) ApprovePlan(context.Context, *ApprovePlanRequest) (*ApprovePlanResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApprovePlan not implemented")
+}
+func (UnimplementedKeleServiceServer) GetBoardOverview(context.Context, *Empty) (*BoardOverviewMsg, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBoardOverview not implemented")
+}
+func (UnimplementedKeleServiceServer) WatchBoard(*WatchBoardRequest, grpc.ServerStreamingServer[BoardEventMsg]) error {
+	return status.Error(codes.Unimplemented, "method WatchBoard not implemented")
+}
+func (UnimplementedKeleServiceServer) GetTaskLog(context.Context, *GetTaskLogRequest) (*TaskLogResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTaskLog not implemented")
 }
 func (UnimplementedKeleServiceServer) mustEmbedUnimplementedKeleServiceServer() {}
 func (UnimplementedKeleServiceServer) testEmbeddedByValue()                     {}
@@ -366,6 +672,316 @@ func _KeleService_GetHeartbeatStatus_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _KeleService_CreateWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateWorkspaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).CreateWorkspace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_CreateWorkspace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).CreateWorkspace(ctx, req.(*CreateWorkspaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_GetWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkspaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).GetWorkspace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_GetWorkspace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).GetWorkspace(ctx, req.(*GetWorkspaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_UpdateWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateWorkspaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).UpdateWorkspace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_UpdateWorkspace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).UpdateWorkspace(ctx, req.(*UpdateWorkspaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_DeleteWorkspace_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteWorkspaceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).DeleteWorkspace(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_DeleteWorkspace_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).DeleteWorkspace(ctx, req.(*DeleteWorkspaceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_ListWorkspaces_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).ListWorkspaces(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_ListWorkspaces_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).ListWorkspaces(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_CreateTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).CreateTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_CreateTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).CreateTask(ctx, req.(*CreateTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_GetTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).GetTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_GetTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).GetTask(ctx, req.(*GetTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_UpdateTaskRPC_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).UpdateTaskRPC(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_UpdateTaskRPC_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).UpdateTaskRPC(ctx, req.(*UpdateTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_DeleteTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).DeleteTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_DeleteTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).DeleteTask(ctx, req.(*DeleteTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_ListTasks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListTasksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).ListTasks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_ListTasks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).ListTasks(ctx, req.(*ListTasksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_StartTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(StartTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).StartTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_StartTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).StartTask(ctx, req.(*StartTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_CancelTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).CancelTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_CancelTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).CancelTask(ctx, req.(*CancelTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_RetryTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RetryTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).RetryTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_RetryTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).RetryTask(ctx, req.(*RetryTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_PlanWorkspace_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(PlanWorkspaceRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(KeleServiceServer).PlanWorkspace(m, &grpc.GenericServerStream[PlanWorkspaceRequest, PlanEventMsg]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KeleService_PlanWorkspaceServer = grpc.ServerStreamingServer[PlanEventMsg]
+
+func _KeleService_ApprovePlan_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApprovePlanRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).ApprovePlan(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_ApprovePlan_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).ApprovePlan(ctx, req.(*ApprovePlanRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_GetBoardOverview_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).GetBoardOverview(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_GetBoardOverview_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).GetBoardOverview(ctx, req.(*Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KeleService_WatchBoard_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchBoardRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(KeleServiceServer).WatchBoard(m, &grpc.GenericServerStream[WatchBoardRequest, BoardEventMsg]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KeleService_WatchBoardServer = grpc.ServerStreamingServer[BoardEventMsg]
+
+func _KeleService_GetTaskLog_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTaskLogRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KeleServiceServer).GetTaskLog(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KeleService_GetTaskLog_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KeleServiceServer).GetTaskLog(ctx, req.(*GetTaskLogRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // KeleService_ServiceDesc is the grpc.ServiceDesc for KeleService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -401,6 +1017,70 @@ var KeleService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "GetHeartbeatStatus",
 			Handler:    _KeleService_GetHeartbeatStatus_Handler,
 		},
+		{
+			MethodName: "CreateWorkspace",
+			Handler:    _KeleService_CreateWorkspace_Handler,
+		},
+		{
+			MethodName: "GetWorkspace",
+			Handler:    _KeleService_GetWorkspace_Handler,
+		},
+		{
+			MethodName: "UpdateWorkspace",
+			Handler:    _KeleService_UpdateWorkspace_Handler,
+		},
+		{
+			MethodName: "DeleteWorkspace",
+			Handler:    _KeleService_DeleteWorkspace_Handler,
+		},
+		{
+			MethodName: "ListWorkspaces",
+			Handler:    _KeleService_ListWorkspaces_Handler,
+		},
+		{
+			MethodName: "CreateTask",
+			Handler:    _KeleService_CreateTask_Handler,
+		},
+		{
+			MethodName: "GetTask",
+			Handler:    _KeleService_GetTask_Handler,
+		},
+		{
+			MethodName: "UpdateTaskRPC",
+			Handler:    _KeleService_UpdateTaskRPC_Handler,
+		},
+		{
+			MethodName: "DeleteTask",
+			Handler:    _KeleService_DeleteTask_Handler,
+		},
+		{
+			MethodName: "ListTasks",
+			Handler:    _KeleService_ListTasks_Handler,
+		},
+		{
+			MethodName: "StartTask",
+			Handler:    _KeleService_StartTask_Handler,
+		},
+		{
+			MethodName: "CancelTask",
+			Handler:    _KeleService_CancelTask_Handler,
+		},
+		{
+			MethodName: "RetryTask",
+			Handler:    _KeleService_RetryTask_Handler,
+		},
+		{
+			MethodName: "ApprovePlan",
+			Handler:    _KeleService_ApprovePlan_Handler,
+		},
+		{
+			MethodName: "GetBoardOverview",
+			Handler:    _KeleService_GetBoardOverview_Handler,
+		},
+		{
+			MethodName: "GetTaskLog",
+			Handler:    _KeleService_GetTaskLog_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -408,6 +1088,16 @@ var KeleService_ServiceDesc = grpc.ServiceDesc{
 			Handler:       _KeleService_Chat_Handler,
 			ServerStreams: true,
 		},
+		{
+			StreamName:    "PlanWorkspace",
+			Handler:       _KeleService_PlanWorkspace_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "WatchBoard",
+			Handler:       _KeleService_WatchBoard_Handler,
+			ServerStreams: true,
+		},
 	},
-	Metadata: "kele.proto",
+	Metadata: "proto/kele.proto",
 }

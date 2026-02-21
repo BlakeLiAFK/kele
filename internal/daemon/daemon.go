@@ -19,6 +19,7 @@ import (
 	"github.com/BlakeLiAFK/kele/internal/llm"
 	"github.com/BlakeLiAFK/kele/internal/memory"
 	pb "github.com/BlakeLiAFK/kele/internal/proto"
+	"github.com/BlakeLiAFK/kele/internal/taskboard"
 	"github.com/BlakeLiAFK/kele/internal/tools"
 )
 
@@ -31,6 +32,9 @@ type Daemon struct {
 	scheduler *cron.Scheduler
 	sessions  *SessionManager
 	heartbeat *heartbeat.Runner
+	board     *taskboard.Board
+	boardSched *taskboard.Scheduler
+	planner   *taskboard.Planner
 	server    *grpc.Server
 	startTime time.Time
 	socketPath string
@@ -154,12 +158,37 @@ func (d *Daemon) initResources() error {
 	d.heartbeat = heartbeat.NewRunner(d.provider, d.executor, d.sessions.Count)
 	d.heartbeat.Start()
 
+	// TaskBoard
+	homeDir, _ := os.UserHomeDir()
+	tbDBPath := filepath.Join(homeDir, ".kele", "taskboard.db")
+	tbStore, err := taskboard.NewTaskStore(tbDBPath)
+	if err != nil {
+		log.Printf("Warning: taskboard store init failed: %v", err)
+	} else {
+		// Recover tasks left in running state from previous crash
+		recovered, _ := tbStore.RecoverRunningTasks()
+		if recovered > 0 {
+			log.Printf("Recovered %d running tasks to ready state", recovered)
+		}
+
+		d.board = taskboard.NewBoard(tbStore)
+		adapter := NewTaskSessionAdapter(d.sessions)
+		d.boardSched = taskboard.NewScheduler(d.board, adapter)
+		d.board.SetScheduler(d.boardSched)
+		d.boardSched.Start()
+		d.planner = taskboard.NewPlanner(adapter)
+		log.Println("TaskBoard initialized")
+	}
+
 	log.Println("All resources initialized")
 	return nil
 }
 
 // cleanup releases all resources.
 func (d *Daemon) cleanup() {
+	if d.boardSched != nil {
+		d.boardSched.Stop()
+	}
 	if d.heartbeat != nil {
 		d.heartbeat.Stop()
 	}

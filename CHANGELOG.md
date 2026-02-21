@@ -1,5 +1,59 @@
 # 更新日志
 
+## v0.4.0 - 2026-02-21
+
+### ✨ 新功能
+
+- **TaskBoard 看板任务系统**: 完整的任务编排与管理系统
+  - Workspace（工作区）隔离管理，独立并发控制
+  - Task 生命周期管理（backlog → ready → running → done/failed）
+  - DAG 依赖解析，任务完成后自动提升下游任务
+  - 事件总线（event bus）实时广播状态变更
+
+- **AI Planner（规划器）**: 模糊目标自动分解为结构化任务
+  - `kele board plan "目标"` 一句话启动，AI 读代码分析架构
+  - 输出结构化 JSON 任务计划（workspace + tasks + 依赖关系）
+  - 用户可审阅、修改后批准执行
+  - `kele board approve` 批准计划并启动调度
+
+- **跨任务上下文注入**: 有依赖的任务自动获取前置任务结果
+  - `buildTaskPrompt` 自动将依赖任务的 result 注入到当前任务 prompt
+  - 每个依赖结果最多 2000 字符，防止 prompt 超长
+
+- **Synthesizer（结果汇总）**: 工作区全部完成后自动生成报告
+  - 聚合各任务 result，AI 生成简洁的完成报告
+  - 报告存储在 workspace.summary，可通过 `kele workspace summary` 查看
+
+- **调度器**: 事件驱动 + 定时兜底的自动任务调度
+  - 每个 workspace 独立并发控制（max_concurrent）
+  - 任务完成后自动解析依赖、提升下游任务、检查工作区完成
+  - Daemon 重启后自动恢复 running → ready
+
+- **18 个新 gRPC RPC**: 完整的 TaskBoard API
+  - Workspace CRUD（5 个）
+  - Task CRUD + 执行控制（8 个）
+  - Planner: PlanWorkspace（streaming）+ ApprovePlan
+  - Board: GetBoardOverview + WatchBoard（streaming）
+  - TaskLog: GetTaskLog
+
+- **CLI 命令**: 三组新命令
+  - `kele board` — 看板总览 + plan + approve + watch
+  - `kele workspace` (alias: ws) — create/list/show/pause/resume/delete/summary
+  - `kele task` — create/list/show/start/cancel/retry/log
+
+### 🔧 技术改进
+
+- 新增 `internal/taskboard/` 包（types.go, store.go, board.go, scheduler.go, planner.go）
+- 独立 SQLite 数据库 `~/.kele/taskboard.db`，与聊天记忆解耦
+- `SessionBrain` 新增 `InjectContext` 方法，支持工作区上下文注入
+- `TaskSessionManager` 接口设计避免 taskboard ↔ daemon 循环依赖
+- `TaskSessionAdapter` 桥接 daemon.SessionManager 与 taskboard 接口
+- gRPC proto 从 8 个 RPC 扩展至 26 个 RPC
+- 新增 `internal/cli/board.go`, `workspace.go`, `task.go`
+- 13 个新增单元测试（types, store CRUD, 依赖解析, plan 解析, JSON 提取）
+
+---
+
 ## v0.3.0 - 2026-02-20
 
 ### ✨ 新功能

@@ -22,11 +22,12 @@ type Session struct {
 
 // SessionBrain holds per-session conversation state with shared resources.
 type SessionBrain struct {
-	provider *llm.ProviderManager
-	executor *tools.Executor
-	memory   *memory.Store
-	history  []llm.Message
-	cfg      *config.Config
+	provider        *llm.ProviderManager
+	executor        *tools.Executor
+	memory          *memory.Store
+	history         []llm.Message
+	cfg             *config.Config
+	injectedContext string // additional context prepended to system prompt
 }
 
 // SessionManager manages all active sessions.
@@ -467,6 +468,58 @@ LLM:
 	}
 }
 
+// --- TaskBoard integration ---
+
+// InjectContext prepends additional context to the session's system prompt.
+func (sb *SessionBrain) InjectContext(ctx string) {
+	sb.injectedContext = ctx
+}
+
+// GetID returns the session's ID.
+func (s *Session) GetID() string {
+	return s.ID
+}
+
+// InjectContext delegates to the brain.
+func (s *Session) InjectContext(ctx string) {
+	s.brain.InjectContext(ctx)
+}
+
+// ChatStreamForTask wraps ChatStream, converting events to taskboard.SessionEvent.
+func (s *Session) ChatStreamForTask(input string) (<-chan TaskSessionEvent, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	eventChan, err := s.brain.ChatStream(input)
+	if err != nil {
+		return nil, err
+	}
+
+	outCh := make(chan TaskSessionEvent, 100)
+	go func() {
+		defer close(outCh)
+		for ev := range eventChan {
+			outCh <- TaskSessionEvent{
+				Type:       ev.Type,
+				Content:    ev.Content,
+				ToolName:   ev.ToolName,
+				ToolResult: ev.ToolResult,
+				Error:      ev.Error,
+			}
+		}
+	}()
+	return outCh, nil
+}
+
+// TaskSessionEvent mirrors taskboard.SessionEvent to avoid import cycle.
+type TaskSessionEvent struct {
+	Type       string
+	Content    string
+	ToolName   string
+	ToolResult string
+	Error      string
+}
+
 // --- internal helpers ---
 
 func (sb *SessionBrain) addMessage(role, content string) {
@@ -499,6 +552,10 @@ func (sb *SessionBrain) getMessages() []llm.Message {
 3. 管理定时任务（cron）
 
 请用中文回答，保持简洁专业。当需要执行操作时，主动使用工具。`, toolList)
+
+	if sb.injectedContext != "" {
+		systemContent += "\n\n## 工作区上下文\n" + sb.injectedContext
+	}
 
 	if sb.memory != nil {
 		memories, err := sb.memory.GetRecentMemories(5)

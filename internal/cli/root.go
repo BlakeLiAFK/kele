@@ -45,6 +45,9 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newDaemonCmd())
 	rootCmd.AddCommand(newAgentCmd())
 	rootCmd.AddCommand(newVersionCmd())
+	rootCmd.AddCommand(newBoardCmd())
+	rootCmd.AddCommand(newWorkspaceCmd())
+	rootCmd.AddCommand(newTaskCmd())
 
 	return rootCmd
 }

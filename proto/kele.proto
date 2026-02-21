@@ -30,6 +30,42 @@ service KeleService {
 
   // GetHeartbeatStatus returns heartbeat system status.
   rpc GetHeartbeatStatus(Empty) returns (HeartbeatStatusResponse);
+
+  // --- TaskBoard: Workspace ---
+
+  rpc CreateWorkspace(CreateWorkspaceRequest) returns (WorkspaceInfo);
+  rpc GetWorkspace(GetWorkspaceRequest) returns (WorkspaceInfo);
+  rpc UpdateWorkspace(UpdateWorkspaceRequest) returns (WorkspaceInfo);
+  rpc DeleteWorkspace(DeleteWorkspaceRequest) returns (Empty);
+  rpc ListWorkspaces(Empty) returns (ListWorkspacesResponse);
+
+  // --- TaskBoard: Task ---
+
+  rpc CreateTask(CreateTaskRequest) returns (TaskInfo);
+  rpc GetTask(GetTaskRequest) returns (TaskInfo);
+  rpc UpdateTaskRPC(UpdateTaskRequest) returns (TaskInfo);
+  rpc DeleteTask(DeleteTaskRequest) returns (Empty);
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+
+  // --- TaskBoard: Task Execution ---
+
+  rpc StartTask(StartTaskRequest) returns (TaskInfo);
+  rpc CancelTask(CancelTaskRequest) returns (TaskInfo);
+  rpc RetryTask(RetryTaskRequest) returns (TaskInfo);
+
+  // --- TaskBoard: Planner ---
+
+  rpc PlanWorkspace(PlanWorkspaceRequest) returns (stream PlanEventMsg);
+  rpc ApprovePlan(ApprovePlanRequest) returns (ApprovePlanResponse);
+
+  // --- TaskBoard: Board ---
+
+  rpc GetBoardOverview(Empty) returns (BoardOverviewMsg);
+  rpc WatchBoard(WatchBoardRequest) returns (stream BoardEventMsg);
+
+  // --- TaskBoard: Task Log ---
+
+  rpc GetTaskLog(GetTaskLogRequest) returns (TaskLogResponse);
 }
 
 message Empty {}
@@ -118,4 +154,208 @@ message HeartbeatStatusResponse {
   string last_decision = 4;
   int32 total_heartbeats = 5;
   int32 actions_taken = 6;
+}
+
+// ============================================================
+// TaskBoard Messages
+// ============================================================
+
+// --- Workspace ---
+
+message WorkspaceInfo {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  string goal = 4;
+  string status = 5;
+  int32  max_concurrent = 6;
+  string context = 7;
+  string work_dir = 8;
+  string summary = 9;
+  int32  task_count = 10;
+  int32  running_count = 11;
+  string created_at = 12;
+}
+
+message CreateWorkspaceRequest {
+  string name = 1;
+  string description = 2;
+  string goal = 3;
+  int32  max_concurrent = 4;
+  string context = 5;
+  string work_dir = 6;
+}
+
+message GetWorkspaceRequest {
+  string id = 1;
+}
+
+message UpdateWorkspaceRequest {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  int32  max_concurrent = 4;
+  string context = 5;
+  string status = 6;
+}
+
+message DeleteWorkspaceRequest {
+  string id = 1;
+}
+
+message ListWorkspacesResponse {
+  repeated WorkspaceInfo workspaces = 1;
+}
+
+// --- Task ---
+
+message TaskInfo {
+  string id = 1;
+  string workspace_id = 2;
+  string title = 3;
+  string description = 4;
+  string prompt = 5;
+  string status = 6;
+  int32  priority = 7;
+  repeated string depends_on = 8;
+  string assigned_session = 9;
+  string result = 10;
+  string error = 11;
+  int32  retry_count = 12;
+  int32  max_retries = 13;
+  repeated string tags = 14;
+  string created_at = 15;
+  string started_at = 16;
+  string completed_at = 17;
+}
+
+message CreateTaskRequest {
+  string workspace_id = 1;
+  string title = 2;
+  string description = 3;
+  string prompt = 4;
+  int32  priority = 5;
+  repeated string depends_on = 6;
+  int32  max_retries = 7;
+  repeated string tags = 8;
+  bool   auto_ready = 9;
+}
+
+message GetTaskRequest {
+  string id = 1;
+}
+
+message UpdateTaskRequest {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  string prompt = 4;
+  int32  priority = 5;
+  repeated string tags = 6;
+}
+
+message DeleteTaskRequest {
+  string id = 1;
+}
+
+message ListTasksRequest {
+  string workspace_id = 1;
+  string status_filter = 2;
+  string tag_filter = 3;
+}
+
+message ListTasksResponse {
+  repeated TaskInfo tasks = 1;
+}
+
+message StartTaskRequest {
+  string id = 1;
+}
+
+message CancelTaskRequest {
+  string id = 1;
+}
+
+message RetryTaskRequest {
+  string id = 1;
+}
+
+// --- Planner ---
+
+message PlanWorkspaceRequest {
+  string goal = 1;
+  string work_dir = 2;
+  int32  max_concurrent = 3;
+}
+
+message PlanEventMsg {
+  string type = 1;
+  string content = 2;
+  string plan_json = 3;
+}
+
+message ApprovePlanRequest {
+  string plan_json = 1;
+  string goal = 2;
+  string work_dir = 3;
+  bool   auto_start = 4;
+}
+
+message ApprovePlanResponse {
+  WorkspaceInfo workspace = 1;
+  repeated TaskInfo tasks = 2;
+}
+
+// --- Board Overview ---
+
+message BoardOverviewMsg {
+  repeated WorkspaceOverviewMsg workspaces = 1;
+  int32 total_tasks = 2;
+  int32 running_tasks = 3;
+  int32 pending_tasks = 4;
+  int32 completed_tasks = 5;
+}
+
+message WorkspaceOverviewMsg {
+  string id = 1;
+  string name = 2;
+  string status = 3;
+  int32  backlog = 4;
+  int32  ready = 5;
+  int32  running = 6;
+  int32  done = 7;
+  int32  failed = 8;
+  int32  max_concurrent = 9;
+}
+
+// --- Board Events ---
+
+message WatchBoardRequest {
+  string workspace_id = 1;
+}
+
+message BoardEventMsg {
+  string type = 1;
+  string workspace_id = 2;
+  string task_id = 3;
+  string detail = 4;
+  string timestamp = 5;
+}
+
+// --- Task Log ---
+
+message GetTaskLogRequest {
+  string task_id = 1;
+  int32  limit = 2;
+}
+
+message TaskLogEntry {
+  string event_type = 1;
+  string content = 2;
+  string tool_name = 3;
+  string timestamp = 4;
+}
+
+message TaskLogResponse {
+  repeated TaskLogEntry entries = 1;
 }

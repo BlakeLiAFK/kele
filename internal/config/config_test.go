@@ -129,7 +129,7 @@ func TestApplyFlags(t *testing.T) {
 }
 
 func TestVersion(t *testing.T) {
-	if Version != "0.2.0" {
-		t.Errorf("版本号应为 0.2.0, 实际 %s", Version)
+	if Version != "0.4.0" {
+		t.Errorf("版本号应为 0.4.0, 实际 %s", Version)
 	}
 }
