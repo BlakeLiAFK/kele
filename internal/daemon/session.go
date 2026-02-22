@@ -10,7 +10,9 @@ import (
 	"github.com/BlakeLiAFK/kele/internal/config"
 	"github.com/BlakeLiAFK/kele/internal/llm"
 	"github.com/BlakeLiAFK/kele/internal/memory"
+	"github.com/BlakeLiAFK/kele/internal/prompt"
 	"github.com/BlakeLiAFK/kele/internal/tools"
+	"github.com/BlakeLiAFK/kele/internal/workspace"
 )
 
 // Session represents a daemon-side chat session with its own conversation history.
@@ -31,27 +33,31 @@ type SessionBrain struct {
 	history         []llm.Message
 	cfg             *config.Config
 	injectedContext string // additional context prepended to system prompt
+	workspace       *workspace.Manager
+	currentWork     string // 当前工作空间名
 }
 
 // SessionManager manages all active sessions.
 type SessionManager struct {
-	sessions map[string]*Session
-	provider *llm.ProviderManager
-	executor *tools.Executor
-	memory   *memory.Store
-	cfg      *config.Config
-	counter  int
-	mu       sync.RWMutex
+	sessions  map[string]*Session
+	provider  *llm.ProviderManager
+	executor  *tools.Executor
+	memory    *memory.Store
+	cfg       *config.Config
+	workspace *workspace.Manager
+	counter   int
+	mu        sync.RWMutex
 }
 
 // NewSessionManager creates a new session manager with shared resources.
-func NewSessionManager(provider *llm.ProviderManager, executor *tools.Executor, store *memory.Store, cfg *config.Config) *SessionManager {
+func NewSessionManager(provider *llm.ProviderManager, executor *tools.Executor, store *memory.Store, cfg *config.Config, ws *workspace.Manager) *SessionManager {
 	return &SessionManager{
-		sessions: make(map[string]*Session),
-		provider: provider,
-		executor: executor,
-		memory:   store,
-		cfg:      cfg,
+		sessions:  make(map[string]*Session),
+		provider:  provider,
+		executor:  executor,
+		memory:    store,
+		cfg:       cfg,
+		workspace: ws,
 	}
 }
 
@@ -70,11 +76,12 @@ func (sm *SessionManager) Create(name string) *Session {
 		ID:   id,
 		Name: name,
 		brain: &SessionBrain{
-			provider: sm.provider,
-			executor: sm.executor,
-			memory:   sm.memory,
-			history:  []llm.Message{},
-			cfg:      sm.cfg,
+			provider:  sm.provider,
+			executor:  sm.executor,
+			memory:    sm.memory,
+			history:   []llm.Message{},
+			cfg:       sm.cfg,
+			workspace: sm.workspace,
 		},
 	}
 	sm.sessions[id] = sess
@@ -293,6 +300,13 @@ func (sb *SessionBrain) RunCommand(command string) (string, bool) {
   /remember <text>  添加到长期记忆
   /search <query>   搜索记忆
   /memory           查看记忆摘要
+
+工作空间
+  /works            列出所有工作空间
+  /works create <n> 创建并切换工作空间
+  /works use <n>    切换工作空间
+  /works delete <n> 删除工作空间
+  /works clear      清空所有工作空间
 
 定时任务
   /cron             查看定时任务列表
@@ -513,6 +527,9 @@ Token 估算: ~%d
 	case "/cron":
 		return "定时任务通过 daemon 管理\n\n通过对话让 AI 帮你创建，例如：\n  \"每5分钟检查一次磁盘空间\"", false
 
+	case "/works":
+		return sb.handleWorks(args), false
+
 	case "/exit", "/quit":
 		return "再见!", true
 
@@ -602,37 +619,25 @@ func (sb *SessionBrain) trimHistory() {
 }
 
 func (sb *SessionBrain) getMessages() []llm.Message {
-	// 在锁内拷贝 history 和 injectedContext
 	sb.mu.RLock()
 	historyCopy := make([]llm.Message, len(sb.history))
 	copy(historyCopy, sb.history)
 	injected := sb.injectedContext
+	workName := sb.currentWork
 	sb.mu.RUnlock()
 
-	// 后续操作无需持锁
-	toolNames := sb.executor.ListTools()
-	toolList := strings.Join(toolNames, ", ")
-
-	systemContent := fmt.Sprintf(`你是 Kele，一个智能的终端 AI 助手。你可以：
-1. 回答问题和进行对话
-2. 使用工具执行操作（可用工具: %s）
-3. 管理定时任务（cron）
-
-请用中文回答，保持简洁专业。当需要执行操作时，主动使用工具。`, toolList)
-
-	if injected != "" {
-		systemContent += "\n\n## 工作区上下文\n" + injected
-	}
-
+	var memories []string
 	if sb.memory != nil {
-		memories, err := sb.memory.GetRecentMemories(5)
-		if err == nil && len(memories) > 0 {
-			systemContent += "\n\n## 用户长期记忆\n"
-			for _, m := range memories {
-				systemContent += "- " + m + "\n"
-			}
-		}
+		memories, _ = sb.memory.GetRecentMemories(5)
 	}
+
+	systemContent := prompt.Build(prompt.BuildParams{
+		ToolNames:     sb.executor.ListTools(),
+		WorkDir:       sb.executor.GetWorkDir(),
+		WorkspaceName: workName,
+		Memories:      memories,
+		InjectedCtx:   injected,
+	})
 
 	messages := []llm.Message{{Role: "system", Content: systemContent}}
 	messages = append(messages, historyCopy...)
@@ -672,4 +677,97 @@ func (sb *SessionBrain) compressToolOutput(output string) string {
 			output[len(output)-tailSize:]
 	}
 	return output
+}
+
+// handleWorks 处理 /works 命令
+func (sb *SessionBrain) handleWorks(args []string) string {
+	if sb.workspace == nil {
+		return "工作空间管理器未初始化"
+	}
+
+	// 无子命令时列出所有工作空间
+	if len(args) == 0 {
+		list, err := sb.workspace.List()
+		if err != nil {
+			return fmt.Sprintf("列出工作空间失败: %v", err)
+		}
+		if len(list) == 0 {
+			var s strings.Builder
+			s.WriteString("暂无工作空间\n\n")
+			s.WriteString(fmt.Sprintf("当前工作目录: %s\n", sb.executor.GetWorkDir()))
+			s.WriteString("\n/works create <name>  创建工作空间")
+			return s.String()
+		}
+		var s strings.Builder
+		s.WriteString(fmt.Sprintf("工作空间 (%d 个)\n\n", len(list)))
+		for _, w := range list {
+			marker := "  "
+			if w.Name == sb.currentWork {
+				marker = "> "
+			}
+			s.WriteString(fmt.Sprintf("%s%-20s %8s  %s\n", marker, w.Name, workspace.FormatSize(w.Size), w.ModTime.Format("01-02 15:04")))
+		}
+		s.WriteString(fmt.Sprintf("\n当前工作目录: %s", sb.executor.GetWorkDir()))
+		if sb.currentWork != "" {
+			s.WriteString(fmt.Sprintf("\n当前工作空间: %s", sb.currentWork))
+		}
+		return s.String()
+	}
+
+	subCmd := args[0]
+	subArgs := args[1:]
+
+	switch subCmd {
+	case "create":
+		if len(subArgs) == 0 {
+			return "用法: /works create <name>"
+		}
+		name := subArgs[0]
+		path, err := sb.workspace.Create(name)
+		if err != nil {
+			return fmt.Sprintf("创建失败: %v", err)
+		}
+		// 创建后自动切换
+		sb.executor.SetWorkDir(path)
+		sb.currentWork = name
+		return fmt.Sprintf("已创建并切换到工作空间: %s\n路径: %s", name, path)
+
+	case "use":
+		if len(subArgs) == 0 {
+			return "用法: /works use <name>"
+		}
+		name := subArgs[0]
+		path, err := sb.workspace.Ensure(name)
+		if err != nil {
+			return fmt.Sprintf("切换失败: %v", err)
+		}
+		sb.executor.SetWorkDir(path)
+		sb.currentWork = name
+		return fmt.Sprintf("已切换到工作空间: %s\n路径: %s", name, path)
+
+	case "delete":
+		if len(subArgs) == 0 {
+			return "用法: /works delete <name>"
+		}
+		name := subArgs[0]
+		if err := sb.workspace.Delete(name); err != nil {
+			return fmt.Sprintf("删除失败: %v", err)
+		}
+		// 如果删除的是当前工作空间，重置工作目录
+		if name == sb.currentWork {
+			sb.currentWork = ""
+		}
+		return fmt.Sprintf("已删除工作空间: %s", name)
+
+	case "clear":
+		count, err := sb.workspace.Clear()
+		if err != nil {
+			return fmt.Sprintf("清空失败: %v", err)
+		}
+		sb.currentWork = ""
+		return fmt.Sprintf("已清空 %d 个工作空间", count)
+
+	default:
+		return fmt.Sprintf("未知子命令: /works %s\n用法: /works [create|use|delete|clear]", subCmd)
+	}
 }

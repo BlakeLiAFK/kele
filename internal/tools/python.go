@@ -25,7 +25,8 @@ func NewPythonTool(workDir string, maxOutputSize int) *PythonTool {
 	}
 }
 
-func (t *PythonTool) Name() string { return "python" }
+func (t *PythonTool) SetWorkDir(dir string) { t.workDir = dir }
+func (t *PythonTool) Name() string           { return "python" }
 
 func (t *PythonTool) Description() string {
 	return "执行 Python 代码片段。适用于数据分析、数学计算、文本处理等。超时限制 30 秒。"

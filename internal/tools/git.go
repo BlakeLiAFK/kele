@@ -18,7 +18,8 @@ func NewGitTool(workDir string, maxOutputSize int) *GitTool {
 	return &GitTool{workDir: workDir, maxOutputSize: maxOutputSize}
 }
 
-func (t *GitTool) Name() string { return "git" }
+func (t *GitTool) SetWorkDir(dir string) { t.workDir = dir }
+func (t *GitTool) Name() string           { return "git" }
 
 func (t *GitTool) Description() string {
 	return "执行 Git 操作。支持 status/diff/log/add/commit/branch/checkout 子命令。禁止 push --force、reset --hard 等危险操作。"

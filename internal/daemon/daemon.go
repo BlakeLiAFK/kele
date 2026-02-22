@@ -24,6 +24,7 @@ import (
 	"github.com/BlakeLiAFK/kele/internal/taskboard"
 	tgbot "github.com/BlakeLiAFK/kele/internal/telegram"
 	"github.com/BlakeLiAFK/kele/internal/tools"
+	"github.com/BlakeLiAFK/kele/internal/workspace"
 )
 
 // Daemon is the background service process that owns all shared resources.
@@ -152,8 +153,11 @@ func (d *Daemon) initResources() error {
 	// Tool executor
 	d.executor = tools.NewExecutor(d.scheduler, d.cfg)
 
+	// 工作空间管理器
+	ws := workspace.NewManager()
+
 	// Session manager
-	d.sessions = NewSessionManager(d.provider, d.executor, d.store, d.cfg)
+	d.sessions = NewSessionManager(d.provider, d.executor, d.store, d.cfg, ws)
 
 	// Create default session
 	d.sessions.Create("default")

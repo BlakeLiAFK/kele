@@ -36,11 +36,12 @@ func (a *TelegramAdapter) GetOrCreateSession(chatID int64) (string, error) {
 		ID:   sessionID,
 		Name: fmt.Sprintf("Telegram %d", chatID),
 		brain: &SessionBrain{
-			provider: a.sessions.provider,
-			executor: a.sessions.executor,
-			memory:   a.sessions.memory,
-			history:  []llm.Message{},
-			cfg:      a.sessions.cfg,
+			provider:  a.sessions.provider,
+			executor:  a.sessions.executor,
+			memory:    a.sessions.memory,
+			history:   []llm.Message{},
+			cfg:       a.sessions.cfg,
+			workspace: a.sessions.workspace,
 		},
 	}
 	a.sessions.sessions[sessionID] = sess

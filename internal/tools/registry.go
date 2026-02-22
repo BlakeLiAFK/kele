@@ -88,3 +88,11 @@ func (r *Registry) Has(name string) bool {
 	_, ok := r.tools[name]
 	return ok
 }
+
+// GetHandler 获取指定名称的工具处理器
+func (r *Registry) GetHandler(name string) (ToolHandler, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	t, ok := r.tools[name]
+	return t, ok
+}

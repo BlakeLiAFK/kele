@@ -91,6 +91,7 @@ func (b *Bot) registerCommands(ctx context.Context, bot *tgbot.Bot) {
 		{Command: "search", Description: "搜索记忆"},
 		{Command: "config", Description: "查看配置"},
 		{Command: "cron", Description: "定时任务"},
+		{Command: "works", Description: "工作空间管理"},
 		{Command: "help", Description: "帮助"},
 	}
 	_, err := bot.SetMyCommands(ctx, &tgbot.SetMyCommandsParams{

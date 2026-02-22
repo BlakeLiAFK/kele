@@ -58,6 +58,26 @@ func (e *Executor) RegisterTool(tool ToolHandler) {
 	e.registry.Register(tool)
 }
 
+// WorkDirAware 支持动态工作目录的工具接口
+type WorkDirAware interface {
+	SetWorkDir(dir string)
+}
+
+// GetWorkDir 获取当前工作目录
+func (e *Executor) GetWorkDir() string { return e.workDir }
+
+// SetWorkDir 设置工作目录（同时更新所有文件相关工具）
+func (e *Executor) SetWorkDir(dir string) {
+	e.workDir = dir
+	for _, name := range e.registry.List() {
+		if handler, ok := e.registry.GetHandler(name); ok {
+			if wda, ok := handler.(WorkDirAware); ok {
+				wda.SetWorkDir(dir)
+			}
+		}
+	}
+}
+
 // GetTools 获取所有可用工具
 func (e *Executor) GetTools() []llm.Tool {
 	tools := e.registry.GetTools()
@@ -126,7 +146,8 @@ type BashTool struct {
 	timeout       time.Duration
 }
 
-func (t *BashTool) Name() string { return "bash" }
+func (t *BashTool) SetWorkDir(dir string) { t.workDir = dir }
+func (t *BashTool) Name() string           { return "bash" }
 func (t *BashTool) Description() string {
 	return "执行 bash 命令。可以用来列出文件、查看目录结构、运行程序等。"
 }
@@ -177,7 +198,8 @@ func (t *BashTool) Execute(args map[string]interface{}) (string, error) {
 // ReadTool 文件读取工具
 type ReadTool struct{ workDir string }
 
-func (t *ReadTool) Name() string        { return "read" }
+func (t *ReadTool) SetWorkDir(dir string) { t.workDir = dir }
+func (t *ReadTool) Name() string           { return "read" }
 func (t *ReadTool) Description() string { return "读取文件内容。用于查看源代码、配置文件等。" }
 func (t *ReadTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{
@@ -209,7 +231,8 @@ type WriteTool struct {
 	maxWriteSize int
 }
 
-func (t *WriteTool) Name() string        { return "write" }
+func (t *WriteTool) SetWorkDir(dir string) { t.workDir = dir }
+func (t *WriteTool) Name() string           { return "write" }
 func (t *WriteTool) Description() string { return "写入或创建文件。用于修改代码、创建新文件等。" }
 func (t *WriteTool) Parameters() map[string]interface{} {
 	return map[string]interface{}{

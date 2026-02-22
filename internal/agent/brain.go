@@ -9,6 +9,7 @@ import (
 	"github.com/BlakeLiAFK/kele/internal/cron"
 	"github.com/BlakeLiAFK/kele/internal/llm"
 	"github.com/BlakeLiAFK/kele/internal/memory"
+	"github.com/BlakeLiAFK/kele/internal/prompt"
 	"github.com/BlakeLiAFK/kele/internal/tools"
 )
 
@@ -254,40 +255,23 @@ func (b *Brain) trimHistory() {
 }
 
 func (b *Brain) getMessages() []llm.Message {
-	// 在锁内拷贝 history
 	b.mu.RLock()
 	historyCopy := make([]llm.Message, len(b.history))
 	copy(historyCopy, b.history)
 	b.mu.RUnlock()
 
-	// 后续操作无需持锁
-	toolNames := b.executor.ListTools()
-	toolList := strings.Join(toolNames, ", ")
-
-	systemContent := fmt.Sprintf(`你是 Kele，一个智能的终端 AI 助手。你可以：
-1. 回答问题和进行对话
-2. 使用工具执行操作（可用工具: %s）
-3. 管理定时任务（cron）
-
-请用中文回答，保持简洁专业。当需要执行操作时，主动使用工具。`, toolList)
-
-	// 动态注入相关记忆到 system prompt
+	var memories []string
 	if b.memory != nil {
-		memories, err := b.memory.GetRecentMemories(5)
-		if err == nil && len(memories) > 0 {
-			systemContent += "\n\n## 用户长期记忆\n"
-			for _, m := range memories {
-				systemContent += "- " + m + "\n"
-			}
-		}
+		memories, _ = b.memory.GetRecentMemories(5)
 	}
 
-	systemPrompt := llm.Message{
-		Role:    "system",
-		Content: systemContent,
-	}
+	systemContent := prompt.Build(prompt.BuildParams{
+		ToolNames: b.executor.ListTools(),
+		WorkDir:   b.executor.GetWorkDir(),
+		Memories:  memories,
+	})
 
-	messages := []llm.Message{systemPrompt}
+	messages := []llm.Message{{Role: "system", Content: systemContent}}
 	messages = append(messages, historyCopy...)
 	return messages
 }
