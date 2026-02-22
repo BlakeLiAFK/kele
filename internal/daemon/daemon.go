@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -185,7 +186,11 @@ func (d *Daemon) initResources() error {
 
 	// Telegram Bot
 	if d.cfg.Telegram.BotToken != "" {
-		adapter := &TelegramAdapter{sessions: d.sessions, cfg: d.cfg}
+		adapter := &TelegramAdapter{
+			sessions:     d.sessions,
+			cfg:          d.cfg,
+			daemonStatus: d.statusText,
+		}
 		d.telegram = tgbot.New(d.cfg.Telegram.BotToken, d.cfg.Telegram.AllowedChat, adapter)
 		go func() {
 			if err := d.telegram.Start(context.Background()); err != nil {
@@ -193,6 +198,21 @@ func (d *Daemon) initResources() error {
 			}
 		}()
 		log.Println("Telegram bot started")
+	}
+
+	// 消息推送工具
+	dispatcher := NewChannelDispatcher()
+	if d.telegram != nil {
+		dispatcher.RegisterTelegram(d.telegram, d.cfg.Telegram.AllowedChat)
+	}
+	if len(dispatcher.Channels()) > 0 {
+		d.executor.RegisterTool(tools.NewSendMessageTool(dispatcher))
+		log.Println("send_message tool registered")
+	}
+
+	// 启动通知
+	if d.telegram != nil {
+		go d.sendStartupNotify()
 	}
 
 	log.Println("All resources initialized")
@@ -240,6 +260,96 @@ func IsRunning() (int, bool) {
 	// Signal 0 checks if process exists without actually sending a signal
 	err = process.Signal(syscall.Signal(0))
 	return pid, err == nil
+}
+
+// statusText 返回 daemon 级别状态文本
+func (d *Daemon) statusText() string {
+	uptime := time.Since(d.startTime).Truncate(time.Second)
+	sessionCount := d.sessions.Count()
+	toolCount := len(d.executor.ListTools())
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Kele v%s\n\n", config.Version)
+	fmt.Fprintf(&sb, "运行时间: %s\n", uptime)
+	fmt.Fprintf(&sb, "活跃会话: %d\n", sessionCount)
+	fmt.Fprintf(&sb, "供应商: %s\n", d.provider.GetActiveProviderName())
+	fmt.Fprintf(&sb, "大模型: %s\n", d.provider.GetModel())
+	fmt.Fprintf(&sb, "小模型: %s\n", d.provider.GetSmallModel())
+	fmt.Fprintf(&sb, "可用工具: %d\n", toolCount)
+
+	if d.scheduler != nil {
+		jobs, err := d.scheduler.ListJobs()
+		if err == nil {
+			enabled := 0
+			for _, j := range jobs {
+				if j.Enabled {
+					enabled++
+				}
+			}
+			fmt.Fprintf(&sb, "定时任务: %d/%d (启用/总计)\n", enabled, len(jobs))
+		}
+	}
+
+	if d.board != nil {
+		sb.WriteString("任务看板: 已启用\n")
+	}
+
+	if d.telegram != nil {
+		sb.WriteString("Telegram: 已连接\n")
+	}
+
+	fmt.Fprintf(&sb, "\n%s", time.Now().Format("2006-01-02 15:04:05"))
+	return sb.String()
+}
+
+// sendStartupNotify 通过已配置渠道发送启动通知
+func (d *Daemon) sendStartupNotify() {
+	// 等待 Telegram bot 连接就绪
+	time.Sleep(2 * time.Second)
+
+	// 确定通知目标: allowedChat > lastChatID
+	chatID := d.cfg.Telegram.AllowedChat
+	if chatID == 0 {
+		chatID = d.telegram.LastChatID()
+	}
+	if chatID == 0 {
+		log.Println("startup notify skipped: no target chat ID")
+		return
+	}
+
+	toolCount := len(d.executor.ListTools())
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Kele v%s 已启动\n", config.Version)
+	fmt.Fprintf(&sb, "━━━━━━━━━━━━━━━━\n")
+	fmt.Fprintf(&sb, "PID      %d\n", os.Getpid())
+	fmt.Fprintf(&sb, "模型     %s\n", d.provider.GetModel())
+	fmt.Fprintf(&sb, "供应商   %s\n", d.provider.GetActiveProviderName())
+	fmt.Fprintf(&sb, "工具     %d 个\n", toolCount)
+
+	if d.scheduler != nil {
+		jobs, err := d.scheduler.ListJobs()
+		if err == nil && len(jobs) > 0 {
+			enabled := 0
+			for _, j := range jobs {
+				if j.Enabled {
+					enabled++
+				}
+			}
+			fmt.Fprintf(&sb, "定时任务 %d/%d\n", enabled, len(jobs))
+		}
+	}
+
+	if d.board != nil {
+		sb.WriteString("看板     已启用\n")
+	}
+
+	fmt.Fprintf(&sb, "━━━━━━━━━━━━━━━━\n")
+	fmt.Fprintf(&sb, "%s", time.Now().Format("2006-01-02 15:04:05"))
+
+	if err := d.telegram.SendText(chatID, sb.String()); err != nil {
+		log.Printf("startup notify failed: %v", err)
+	}
 }
 
 // Stop sends SIGTERM to the running daemon.

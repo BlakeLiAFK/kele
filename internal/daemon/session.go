@@ -325,6 +325,7 @@ func (sb *SessionBrain) RunCommand(command string) (string, bool) {
 		}
 		modelName := strings.Join(args, " ")
 		sb.provider.SetModel(modelName)
+		config.SetValue("llm.openai_model", modelName)
 		return fmt.Sprintf("已切换模型: %s (供应商: %s)", modelName, sb.provider.GetActiveProviderName()), false
 
 	case "/model-small":
@@ -333,6 +334,7 @@ func (sb *SessionBrain) RunCommand(command string) (string, bool) {
 		}
 		modelName := strings.Join(args, " ")
 		sb.provider.SetSmallModel(modelName)
+		config.SetValue("llm.small_model", modelName)
 		return fmt.Sprintf("已切换小模型: %s", modelName), false
 
 	case "/models":
@@ -349,6 +351,7 @@ func (sb *SessionBrain) RunCommand(command string) (string, bool) {
 
 	case "/model-reset":
 		sb.provider.ResetModel()
+		config.DeleteValue("llm.openai_model")
 		return fmt.Sprintf("已重置为默认模型: %s (%s)", sb.provider.GetDefaultModel(), sb.provider.GetActiveProviderName()), false
 
 	case "/model-info":

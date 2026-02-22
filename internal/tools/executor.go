@@ -52,6 +52,11 @@ func NewExecutor(scheduler *cron.Scheduler, cfg *config.Config) *Executor {
 	return e
 }
 
+// RegisterTool 注册外部工具（用于延迟注册）
+func (e *Executor) RegisterTool(tool ToolHandler) {
+	e.registry.Register(tool)
+}
+
 // GetTools 获取所有可用工具
 func (e *Executor) GetTools() []llm.Tool {
 	tools := e.registry.GetTools()

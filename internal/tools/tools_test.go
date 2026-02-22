@@ -229,7 +229,155 @@ func TestPythonMissingCode(t *testing.T) {
 	}
 }
 
+// --- SendMessageTool 测试 ---
+
+func TestSendMessageToolName(t *testing.T) {
+	sender := &mockSender{channels: []string{"telegram"}}
+	tool := NewSendMessageTool(sender)
+
+	if tool.Name() != "send_message" {
+		t.Errorf("工具名应为 send_message, 实际 %s", tool.Name())
+	}
+}
+
+func TestSendMessageToolDescription(t *testing.T) {
+	sender := &mockSender{channels: []string{"telegram", "slack"}}
+	tool := NewSendMessageTool(sender)
+
+	desc := tool.Description()
+	if !strings.Contains(desc, "telegram") || !strings.Contains(desc, "slack") {
+		t.Errorf("描述应包含渠道列表, 实际 %s", desc)
+	}
+}
+
+func TestSendMessageToolParameters(t *testing.T) {
+	sender := &mockSender{channels: []string{"telegram"}}
+	tool := NewSendMessageTool(sender)
+
+	params := tool.Parameters()
+	props, ok := params["properties"].(map[string]interface{})
+	if !ok {
+		t.Fatal("参数应包含 properties")
+	}
+	if _, ok := props["channel"]; !ok {
+		t.Error("参数应包含 channel")
+	}
+	if _, ok := props["message"]; !ok {
+		t.Error("参数应包含 message")
+	}
+	if _, ok := props["target"]; !ok {
+		t.Error("参数应包含 target")
+	}
+
+	required, ok := params["required"].([]string)
+	if !ok || len(required) != 2 {
+		t.Error("required 应包含 channel 和 message")
+	}
+}
+
+func TestSendMessageToolExecute(t *testing.T) {
+	sender := &mockSender{channels: []string{"telegram"}, result: "sent"}
+	tool := NewSendMessageTool(sender)
+
+	result, err := tool.Execute(map[string]interface{}{
+		"channel": "telegram",
+		"message": "hello",
+	})
+	if err != nil {
+		t.Fatalf("执行失败: %v", err)
+	}
+	if result != "sent" {
+		t.Errorf("结果应为 sent, 实际 %s", result)
+	}
+	if sender.lastChannel != "telegram" || sender.lastMessage != "hello" {
+		t.Errorf("sender 收到参数不正确: channel=%s, message=%s", sender.lastChannel, sender.lastMessage)
+	}
+}
+
+func TestSendMessageToolExecuteWithTarget(t *testing.T) {
+	sender := &mockSender{channels: []string{"telegram"}, result: "sent"}
+	tool := NewSendMessageTool(sender)
+
+	_, err := tool.Execute(map[string]interface{}{
+		"channel": "telegram",
+		"message": "hello",
+		"target":  "12345",
+	})
+	if err != nil {
+		t.Fatalf("执行失败: %v", err)
+	}
+	if sender.lastTarget != "12345" {
+		t.Errorf("target 应为 12345, 实际 %s", sender.lastTarget)
+	}
+}
+
+func TestSendMessageToolMissingChannel(t *testing.T) {
+	sender := &mockSender{channels: []string{"telegram"}}
+	tool := NewSendMessageTool(sender)
+
+	_, err := tool.Execute(map[string]interface{}{
+		"message": "hello",
+	})
+	if err == nil {
+		t.Error("缺少 channel 应报错")
+	}
+}
+
+func TestSendMessageToolMissingMessage(t *testing.T) {
+	sender := &mockSender{channels: []string{"telegram"}}
+	tool := NewSendMessageTool(sender)
+
+	_, err := tool.Execute(map[string]interface{}{
+		"channel": "telegram",
+	})
+	if err == nil {
+		t.Error("缺少 message 应报错")
+	}
+}
+
+func TestSendMessageToolRegisterTool(t *testing.T) {
+	r := NewRegistry()
+	sender := &mockSender{channels: []string{"telegram"}}
+	tool := NewSendMessageTool(sender)
+	r.Register(tool)
+
+	if !r.Has("send_message") {
+		t.Error("send_message 应注册成功")
+	}
+
+	tools := r.GetTools()
+	found := false
+	for _, tl := range tools {
+		if tl.Function.Name == "send_message" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("GetTools 应包含 send_message")
+	}
+}
+
 // --- mock 工具 ---
+
+type mockSender struct {
+	channels    []string
+	result      string
+	lastChannel string
+	lastTarget  string
+	lastMessage string
+}
+
+func (m *mockSender) Send(channel, target, message string) (string, error) {
+	m.lastChannel = channel
+	m.lastTarget = target
+	m.lastMessage = message
+	return m.result, nil
+}
+
+func (m *mockSender) Channels() []string {
+	return m.channels
+}
 
 type mockTool struct {
 	name   string

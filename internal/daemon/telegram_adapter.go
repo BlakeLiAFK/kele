@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/BlakeLiAFK/kele/internal/config"
 	"github.com/BlakeLiAFK/kele/internal/llm"
@@ -10,8 +11,9 @@ import (
 
 // TelegramAdapter 桥接 SessionManager 到 telegram.SessionProvider 接口
 type TelegramAdapter struct {
-	sessions *SessionManager
-	cfg      *config.Config
+	sessions     *SessionManager
+	cfg          *config.Config
+	daemonStatus func() string // daemon 级别状态回调
 }
 
 // GetOrCreateSession 根据 chatID 获取或创建会话
@@ -73,6 +75,12 @@ func (a *TelegramAdapter) ChatStream(sessionID string, input string) (<-chan tel
 
 // RunCommand 执行斜杠命令
 func (a *TelegramAdapter) RunCommand(sessionID string, command string) (string, bool, error) {
+	// daemon 级别命令拦截
+	parts := strings.Fields(command)
+	if len(parts) > 0 && parts[0] == "/status" && a.daemonStatus != nil {
+		return a.daemonStatus(), false, nil
+	}
+
 	sess := a.sessions.Get(sessionID)
 	if sess == nil {
 		return "", false, fmt.Errorf("session not found: %s", sessionID)
