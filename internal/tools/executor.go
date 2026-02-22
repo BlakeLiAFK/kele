@@ -48,6 +48,7 @@ func NewExecutor(scheduler *cron.Scheduler, cfg *config.Config) *Executor {
 	e.registry.Register(NewHTTPTool(cfg.Tools.MaxOutputSize))
 	e.registry.Register(NewGitTool(wd, cfg.Tools.MaxOutputSize))
 	e.registry.Register(NewPythonTool(wd, cfg.Tools.MaxOutputSize))
+	e.registry.Register(NewWebFetchTool(cfg.Tools.MaxOutputSize))
 
 	return e
 }
