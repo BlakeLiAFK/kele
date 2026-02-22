@@ -358,8 +358,12 @@ func (s *Store) SaveSession(sessionID string, messages []Message) error {
 		if err != nil {
 			continue
 		}
-		file.Write(line)
-		file.Write([]byte("\n"))
+		if _, err := file.Write(line); err != nil {
+			return fmt.Errorf("写入会话数据失败: %w", err)
+		}
+		if _, err := file.Write([]byte("\n")); err != nil {
+			return fmt.Errorf("写入会话数据失败: %w", err)
+		}
 	}
 
 	summary := ""

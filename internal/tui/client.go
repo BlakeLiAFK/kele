@@ -3,9 +3,13 @@ package tui
 import (
 	"context"
 	"io"
+	"time"
 
 	pb "github.com/BlakeLiAFK/kele/internal/proto"
 )
+
+// gRPC 调用默认超时
+const grpcTimeout = 10 * time.Second
 
 // DaemonClient wraps the gRPC client for TUI use.
 type DaemonClient struct {
@@ -54,7 +58,9 @@ func (dc *DaemonClient) ChatStream(sessionID, input string) (<-chan streamEvent,
 
 // Complete performs AI completion via daemon.
 func (dc *DaemonClient) Complete(sessionID, input string) (string, error) {
-	resp, err := dc.client.Complete(context.Background(), &pb.CompleteRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), grpcTimeout)
+	defer cancel()
+	resp, err := dc.client.Complete(ctx, &pb.CompleteRequest{
 		SessionId: sessionID,
 		Input:     input,
 	})
@@ -66,7 +72,9 @@ func (dc *DaemonClient) Complete(sessionID, input string) (string, error) {
 
 // RunCommand executes a slash command via daemon.
 func (dc *DaemonClient) RunCommand(sessionID, command string) (string, bool, error) {
-	resp, err := dc.client.RunCommand(context.Background(), &pb.RunCommandRequest{
+	ctx, cancel := context.WithTimeout(context.Background(), grpcTimeout)
+	defer cancel()
+	resp, err := dc.client.RunCommand(ctx, &pb.RunCommandRequest{
 		SessionId: sessionID,
 		Command:   command,
 	})
@@ -78,18 +86,24 @@ func (dc *DaemonClient) RunCommand(sessionID, command string) (string, bool, err
 
 // CreateSession creates a new session on the daemon.
 func (dc *DaemonClient) CreateSession(name string) (*pb.SessionInfo, error) {
-	return dc.client.CreateSession(context.Background(), &pb.CreateSessionRequest{Name: name})
+	ctx, cancel := context.WithTimeout(context.Background(), grpcTimeout)
+	defer cancel()
+	return dc.client.CreateSession(ctx, &pb.CreateSessionRequest{Name: name})
 }
 
 // DeleteSession removes a session from the daemon.
 func (dc *DaemonClient) DeleteSession(sessionID string) error {
-	_, err := dc.client.DeleteSession(context.Background(), &pb.DeleteSessionRequest{SessionId: sessionID})
+	ctx, cancel := context.WithTimeout(context.Background(), grpcTimeout)
+	defer cancel()
+	_, err := dc.client.DeleteSession(ctx, &pb.DeleteSessionRequest{SessionId: sessionID})
 	return err
 }
 
 // ListSessions returns all active daemon sessions.
 func (dc *DaemonClient) ListSessions() ([]*pb.SessionInfo, error) {
-	resp, err := dc.client.ListSessions(context.Background(), &pb.Empty{})
+	ctx, cancel := context.WithTimeout(context.Background(), grpcTimeout)
+	defer cancel()
+	resp, err := dc.client.ListSessions(ctx, &pb.Empty{})
 	if err != nil {
 		return nil, err
 	}
@@ -98,5 +112,7 @@ func (dc *DaemonClient) ListSessions() ([]*pb.SessionInfo, error) {
 
 // GetStatus returns daemon status.
 func (dc *DaemonClient) GetStatus() (*pb.StatusResponse, error) {
-	return dc.client.GetStatus(context.Background(), &pb.Empty{})
+	ctx, cancel := context.WithTimeout(context.Background(), grpcTimeout)
+	defer cancel()
+	return dc.client.GetStatus(ctx, &pb.Empty{})
 }

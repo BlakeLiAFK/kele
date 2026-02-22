@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"time"
@@ -48,6 +49,7 @@ func NewRootCmd() *cobra.Command {
 	rootCmd.AddCommand(newBoardCmd())
 	rootCmd.AddCommand(newWorkspaceCmd())
 	rootCmd.AddCommand(newTaskCmd())
+	rootCmd.AddCommand(newConfigCmd())
 
 	return rootCmd
 }
@@ -124,8 +126,12 @@ func ensureDaemon() (*grpc.ClientConn, error) {
 		if err := daemonCmd.Start(); err != nil {
 			return nil, fmt.Errorf("start daemon: %w", err)
 		}
-		// Don't wait for it
-		go daemonCmd.Wait()
+		// 后台回收进程资源
+		go func() {
+			if err := daemonCmd.Wait(); err != nil {
+				log.Printf("daemon 进程退出: %v", err)
+			}
+		}()
 	}
 
 	// Wait for socket to be ready

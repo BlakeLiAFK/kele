@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -46,12 +47,12 @@ func (a *App) handleCommand(cmd string) {
   ESC x2           打断任务链（2秒内按两次）
   Ctrl+C x2        退出程序（2秒内按两次）
   Ctrl+E           展开/折叠 Thinking
+  Ctrl+G           切换鼠标模式（滚轮滚动/文本选中）
   Ctrl+O           设置面板
   Ctrl+T           新建会话
   Ctrl+W           关闭当前会话
-  Ctrl+Right       下一个会话
-  Ctrl+Left        上一个会话
-  Alt+1..9         切换会话（需终端支持）
+  Ctrl+N           下一个会话
+  Ctrl+P           上一个会话
 
 @ 引用
   @file.go         引用单个文件
@@ -84,9 +85,13 @@ func (a *App) handleCommand(cmd string) {
   /cron             查看定时任务列表
   (创建/修改/删除请直接对话，AI 会使用工具)
 
+配置管理
+  /config           列出所有配置项
+  /config set k v   设置配置项
+  /config get k     获取配置项
+
 信息查看
   /status           显示系统状态
-  /config           显示当前配置
   /history          显示完整对话历史
   /tokens           显示 token 估算
   /debug            显示调试信息
@@ -121,7 +126,7 @@ func (a *App) handleCommand(cmd string) {
 			}
 			sb.WriteString(fmt.Sprintf("%s%d: %s (%d 条消息)\n", marker, i+1, s.name, len(s.messages)))
 		}
-		sb.WriteString("\n使用 Ctrl+Right/Left / Alt+N / /switch N 切换")
+		sb.WriteString("\n使用 Ctrl+N/P 或 /switch N 切换")
 		sess.AddMessage("assistant", sb.String())
 
 	case "/switch":
@@ -260,57 +265,12 @@ Token 估算: ~%d
 		}
 
 	case "/config":
-		cfg := a.cfg
-		if sess.brain != nil {
-			sess.AddMessage("assistant", fmt.Sprintf(`当前配置 (v%s)
-
-LLM:
-  OpenAI API Base:  %s
-  OpenAI Key:       %s
-  Anthropic Key:    %s
-  Ollama Host:      %s
-  默认模型:          %s
-  温度:              %.1f
-  最大 Tokens:       %d
-
-工具:
-  Bash 超时:         %ds
-  最大输出:          %d bytes
-  最大写入:          %d bytes
-
-记忆:
-  数据库:            %s
-  记忆文件:          %s
-  会话目录:          %s
-
-TUI:
-  最大会话数:        %d
-  最大输入字符:      %d
-
-运行时:
-  大模型: %s (%s)
-  小模型: %s`,
-				config.Version,
-				cfg.LLM.OpenAIAPIBase,
-				maskKey(cfg.LLM.OpenAIAPIKey),
-				maskKey(cfg.LLM.AnthropicAPIKey),
-				cfg.LLM.OllamaHost,
-				cfg.LLM.OpenAIModel,
-				cfg.LLM.Temperature,
-				cfg.LLM.MaxTokens,
-				cfg.Tools.BashTimeout,
-				cfg.Tools.MaxOutputSize,
-				cfg.Tools.MaxWriteSize,
-				cfg.Memory.DBPath,
-				cfg.Memory.MemoryFile,
-				cfg.Memory.SessionDir,
-				cfg.TUI.MaxSessions,
-				cfg.TUI.MaxInputChars,
-				sess.brain.GetModel(), sess.brain.GetProviderName(),
-				sess.brain.GetSmallModel()))
-		} else {
-			sess.AddMessage("assistant", fmt.Sprintf("当前配置 (v%s)\n\n运行模式: daemon", config.Version))
+		// daemon 模式下转发到 daemon 执行，standalone 模式本地处理
+		if a.isDaemonMode() {
+			a.handleDaemonCommand("/config", args, "/config "+strings.Join(args, " "))
+			return
 		}
+		a.handleConfigLocal(args)
 
 	case "/history":
 		if sess.brain == nil {
@@ -543,6 +503,7 @@ Daemon Session: %s`,
 
 	case "/exit", "/quit":
 		sess.AddMessage("assistant", "再见!")
+		a.Close()
 		a.quitting = true
 		return
 
@@ -582,6 +543,7 @@ func (a *App) handleDaemonCommand(command string, args []string, fullCmd string)
 	}
 
 	if quit {
+		a.Close()
 		a.quitting = true
 	}
 
@@ -597,6 +559,70 @@ func maskKey(key string) string {
 		return "****"
 	}
 	return key[:4] + "..." + key[len(key)-4:]
+}
+
+// handleConfigLocal standalone 模式下本地处理 /config 命令
+func (a *App) handleConfigLocal(args []string) {
+	sess := a.currentSession()
+
+	if len(args) == 0 || args[0] == "list" {
+		all := config.AllSettings(a.cfg)
+		dbValues, _ := config.ListValues()
+
+		keys := make([]string, 0, len(all))
+		for k := range all {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		var sb strings.Builder
+		sb.WriteString(fmt.Sprintf("Kele v%s 配置\n\n", config.Version))
+		for _, k := range keys {
+			v := all[k]
+			if v == "" {
+				v = "(未设置)"
+			}
+			tag := ""
+			if _, ok := dbValues[k]; ok {
+				tag = " [db]"
+			}
+			sb.WriteString(fmt.Sprintf("  %-28s %s%s\n", k, v, tag))
+		}
+		sb.WriteString("\n/config set <key> <value>  设置配置")
+		sb.WriteString("\n/config get <key>          获取配置")
+		sess.AddMessage("assistant", sb.String())
+		return
+	}
+
+	switch args[0] {
+	case "set":
+		if len(args) < 3 {
+			sess.AddMessage("assistant", "用法: /config set <key> <value>")
+			return
+		}
+		key := args[1]
+		val := strings.Join(args[2:], " ")
+		if err := config.SetValue(key, val); err != nil {
+			sess.AddMessage("assistant", fmt.Sprintf("设置失败: %v", err))
+			return
+		}
+		sess.AddMessage("assistant", fmt.Sprintf("%s = %s", key, val))
+
+	case "get":
+		if len(args) < 2 {
+			sess.AddMessage("assistant", "用法: /config get <key>")
+			return
+		}
+		val, err := config.GetValue(args[1])
+		if err != nil {
+			sess.AddMessage("assistant", fmt.Sprintf("获取失败: %v", err))
+			return
+		}
+		sess.AddMessage("assistant", fmt.Sprintf("%s = %s", args[1], val))
+
+	default:
+		sess.AddMessage("assistant", fmt.Sprintf("未知子命令: /config %s\n用法: /config [set|get|list]", args[0]))
+	}
 }
 
 // memoryMessage 内部消息结构（用于 /save）

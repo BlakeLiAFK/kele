@@ -29,8 +29,20 @@ func (s *Service) Chat(req *pb.ChatRequest, stream pb.KeleService_ChatServer) er
 		return fmt.Errorf("session not found: %s", req.SessionId)
 	}
 
+	// 短暂加锁检查并设置 streaming 标志，避免并发流式请求
 	sess.mu.Lock()
-	defer sess.mu.Unlock()
+	if sess.streaming {
+		sess.mu.Unlock()
+		return fmt.Errorf("session %s is already streaming", req.SessionId)
+	}
+	sess.streaming = true
+	sess.mu.Unlock()
+
+	defer func() {
+		sess.mu.Lock()
+		sess.streaming = false
+		sess.mu.Unlock()
+	}()
 
 	eventChan, err := sess.brain.ChatStream(req.Input)
 	if err != nil {
@@ -112,7 +124,7 @@ func (s *Service) ListSessions(_ context.Context, _ *pb.Empty) (*pb.ListSessions
 		infos[i] = &pb.SessionInfo{
 			Id:           sess.ID,
 			Name:         sess.Name,
-			HistoryCount: int32(len(sess.brain.history)),
+			HistoryCount: int32(sess.brain.HistoryLen()),
 			Model:        s.daemon.provider.GetModel(),
 			Provider:     s.daemon.provider.GetActiveProviderName(),
 		}

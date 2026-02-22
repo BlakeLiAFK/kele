@@ -76,6 +76,9 @@ type App struct {
 	statusContent string
 	overlayMode   string // "" | "settings"
 
+	// 鼠标模式（启用时支持滚轮滚动，禁用时支持文本选中复制）
+	mouseEnabled bool
+
 	// 双击检测
 	lastCtrlC time.Time
 	lastEsc   time.Time
@@ -138,6 +141,7 @@ func NewApp(cfg *config.Config) *App {
 		nextSessionID: 2,
 		textarea:      ta,
 		completion:    NewCompletionEngine(firstSession.brain),
+		mouseEnabled:  true,
 	}
 	app.updateStatus("Ready")
 	return app
@@ -177,9 +181,17 @@ func NewAppWithClient(cfg *config.Config, grpcClient pb.KeleServiceClient) *App 
 		nextSessionID: 2,
 		textarea:      ta,
 		completion:    NewCompletionEngineWithClient(dc, firstSession.daemonSessID),
+		mouseEnabled:  true,
 	}
 	app.updateStatus("Ready")
 	return app
+}
+
+// Close 释放应用资源
+func (a *App) Close() {
+	if a.scheduler != nil {
+		a.scheduler.Stop()
+	}
 }
 
 // isDaemonMode 检查是否使用 daemon 模式
@@ -359,8 +371,12 @@ func (a *App) View() string {
 
 // renderHelpLine 渲染底部帮助行
 func (a *App) renderHelpLine() string {
+	mouseHint := "Ctrl+G 选中"
+	if !a.mouseEnabled {
+		mouseHint = "Ctrl+G 滚轮"
+	}
 	return helpStyle.Width(a.width).Render(
-		"Tab 补全 | Enter 发送 | Ctrl+J 换行 | Ctrl+E 思考 | Ctrl+O 设置 | Ctrl+C x2 退出")
+		fmt.Sprintf("Tab 补全 | Enter 发送 | Ctrl+J 换行 | Ctrl+E 思考 | %s | Ctrl+C x2 退出", mouseHint))
 }
 
 // handleEnter 处理 Enter 发送

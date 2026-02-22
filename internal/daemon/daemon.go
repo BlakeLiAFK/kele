@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"github.com/BlakeLiAFK/kele/internal/memory"
 	pb "github.com/BlakeLiAFK/kele/internal/proto"
 	"github.com/BlakeLiAFK/kele/internal/taskboard"
+	tgbot "github.com/BlakeLiAFK/kele/internal/telegram"
 	"github.com/BlakeLiAFK/kele/internal/tools"
 )
 
@@ -32,10 +34,11 @@ type Daemon struct {
 	scheduler *cron.Scheduler
 	sessions  *SessionManager
 	heartbeat *heartbeat.Runner
-	board     *taskboard.Board
+	board      *taskboard.Board
 	boardSched *taskboard.Scheduler
-	planner   *taskboard.Planner
-	server    *grpc.Server
+	planner    *taskboard.Planner
+	telegram   *tgbot.Bot
+	server     *grpc.Server
 	startTime time.Time
 	socketPath string
 	pidPath    string
@@ -180,12 +183,27 @@ func (d *Daemon) initResources() error {
 		log.Println("TaskBoard initialized")
 	}
 
+	// Telegram Bot
+	if d.cfg.Telegram.BotToken != "" {
+		adapter := &TelegramAdapter{sessions: d.sessions, cfg: d.cfg}
+		d.telegram = tgbot.New(d.cfg.Telegram.BotToken, d.cfg.Telegram.AllowedChat, adapter)
+		go func() {
+			if err := d.telegram.Start(context.Background()); err != nil {
+				log.Printf("Telegram bot error: %v", err)
+			}
+		}()
+		log.Println("Telegram bot started")
+	}
+
 	log.Println("All resources initialized")
 	return nil
 }
 
 // cleanup releases all resources.
 func (d *Daemon) cleanup() {
+	if d.telegram != nil {
+		d.telegram.Stop()
+	}
 	if d.boardSched != nil {
 		d.boardSched.Stop()
 	}
@@ -194,6 +212,9 @@ func (d *Daemon) cleanup() {
 	}
 	if d.scheduler != nil {
 		d.scheduler.Stop()
+	}
+	if d.store != nil {
+		d.store.Close()
 	}
 	os.Remove(d.socketPath)
 	os.Remove(d.pidPath)

@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -14,14 +15,16 @@ import (
 
 // Session represents a daemon-side chat session with its own conversation history.
 type Session struct {
-	ID       string
-	Name     string
-	brain    *SessionBrain
-	mu       sync.Mutex
+	ID        string
+	Name      string
+	brain     *SessionBrain
+	mu        sync.Mutex
+	streaming bool
 }
 
 // SessionBrain holds per-session conversation state with shared resources.
 type SessionBrain struct {
+	mu              sync.RWMutex
 	provider        *llm.ProviderManager
 	executor        *tools.Executor
 	memory          *memory.Store
@@ -231,6 +234,12 @@ type ChatEvent struct {
 
 // Complete performs AI input completion.
 func (sb *SessionBrain) Complete(input string) (string, error) {
+	// 在锁内拷贝 history
+	sb.mu.RLock()
+	historyCopy := make([]llm.Message, len(sb.history))
+	copy(historyCopy, sb.history)
+	sb.mu.RUnlock()
+
 	systemMsg := llm.Message{
 		Role: "system",
 		Content: `你是输入补全助手。根据对话上下文和用户当前输入，预测用户接下来要输入的完整文本。
@@ -242,7 +251,7 @@ func (sb *SessionBrain) Complete(input string) (string, error) {
 	}
 
 	messages := []llm.Message{systemMsg}
-	recent := sb.history
+	recent := historyCopy
 	if len(recent) > 4 {
 		recent = recent[len(recent)-4:]
 	}
@@ -288,9 +297,13 @@ func (sb *SessionBrain) RunCommand(command string) (string, bool) {
 定时任务
   /cron             查看定时任务列表
 
+配置管理
+  /config           列出所有配置项
+  /config set k v   设置配置项
+  /config get k     获取配置项
+
 信息查看
   /status           显示系统状态
-  /config           显示当前配置
   /history          显示完整对话历史
   /tokens           显示 token 估算
 
@@ -299,7 +312,9 @@ func (sb *SessionBrain) RunCommand(command string) (string, bool) {
   /export           导出对话为 Markdown`, config.Version), false
 
 	case "/clear", "/reset":
+		sb.mu.Lock()
 		sb.history = []llm.Message{}
+		sb.mu.Unlock()
 		return "对话已清空", false
 
 	case "/model":
@@ -375,40 +390,75 @@ Token 估算: ~%d
 			time.Now().Format("2006-01-02 15:04:05")), false
 
 	case "/config":
-		cfg := sb.cfg
-		return fmt.Sprintf(`当前配置 (v%s)
+		if len(args) == 0 {
+			all := config.AllSettings(sb.cfg)
+			dbValues, _ := config.ListValues()
 
-LLM:
-  OpenAI API Base:  %s
-  Ollama Host:      %s
-  默认模型:          %s
-  温度:              %.1f
-  最大 Tokens:       %d
+			keys := make([]string, 0, len(all))
+			for k := range all {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
 
-工具:
-  Bash 超时:         %ds
-  最大输出:          %d bytes
-
-记忆:
-  数据库:            %s
-  记忆文件:          %s`,
-			config.Version,
-			cfg.LLM.OpenAIAPIBase, cfg.LLM.OllamaHost,
-			cfg.LLM.OpenAIModel, cfg.LLM.Temperature, cfg.LLM.MaxTokens,
-			cfg.Tools.BashTimeout, cfg.Tools.MaxOutputSize,
-			cfg.Memory.DBPath, cfg.Memory.MemoryFile), false
+			var s strings.Builder
+			s.WriteString(fmt.Sprintf("Kele v%s 配置\n\n", config.Version))
+			for _, k := range keys {
+				v := all[k]
+				if v == "" {
+					v = "(未设置)"
+				}
+				tag := ""
+				if _, ok := dbValues[k]; ok {
+					tag = " [db]"
+				}
+				s.WriteString(fmt.Sprintf("  %-28s %s%s\n", k, v, tag))
+			}
+			s.WriteString("\n/config set <key> <value>  设置配置")
+			s.WriteString("\n/config get <key>          获取配置")
+			return s.String(), false
+		}
+		subCmd := args[0]
+		subArgs := args[1:]
+		switch subCmd {
+		case "set":
+			if len(subArgs) < 2 {
+				return "用法: /config set <key> <value>", false
+			}
+			key := subArgs[0]
+			val := strings.Join(subArgs[1:], " ")
+			if err := config.SetValue(key, val); err != nil {
+				return fmt.Sprintf("设置失败: %v", err), false
+			}
+			return fmt.Sprintf("%s = %s", key, val), false
+		case "get":
+			if len(subArgs) < 1 {
+				return "用法: /config get <key>", false
+			}
+			val, err := config.GetValue(subArgs[0])
+			if err != nil {
+				return fmt.Sprintf("获取失败: %v", err), false
+			}
+			return fmt.Sprintf("%s = %s", subArgs[0], val), false
+		default:
+			return fmt.Sprintf("未知子命令: /config %s\n用法: /config [set|get]", subCmd), false
+		}
 
 	case "/history":
+		sb.mu.RLock()
+		historyCopy := make([]llm.Message, len(sb.history))
+		copy(historyCopy, sb.history)
+		sb.mu.RUnlock()
+
 		var s strings.Builder
 		s.WriteString("对话历史\n\n")
-		for i, msg := range sb.history {
+		for i, msg := range historyCopy {
 			content := msg.Content
 			if len([]rune(content)) > 100 {
 				content = string([]rune(content)[:100]) + "..."
 			}
 			s.WriteString(fmt.Sprintf("%d. [%s] %s\n\n", i+1, msg.Role, content))
 		}
-		if len(sb.history) == 0 {
+		if len(historyCopy) == 0 {
 			s.WriteString("(暂无历史记录)")
 		}
 		return s.String(), false
@@ -472,6 +522,8 @@ LLM:
 
 // InjectContext prepends additional context to the session's system prompt.
 func (sb *SessionBrain) InjectContext(ctx string) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
 	sb.injectedContext = ctx
 }
 
@@ -523,11 +575,15 @@ type TaskSessionEvent struct {
 // --- internal helpers ---
 
 func (sb *SessionBrain) addMessage(role, content string) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
 	sb.history = append(sb.history, llm.Message{Role: role, Content: content})
 	sb.trimHistory()
 }
 
 func (sb *SessionBrain) appendRawMessage(msg llm.Message) {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
 	sb.history = append(sb.history, msg)
 	sb.trimHistory()
 }
@@ -543,6 +599,14 @@ func (sb *SessionBrain) trimHistory() {
 }
 
 func (sb *SessionBrain) getMessages() []llm.Message {
+	// 在锁内拷贝 history 和 injectedContext
+	sb.mu.RLock()
+	historyCopy := make([]llm.Message, len(sb.history))
+	copy(historyCopy, sb.history)
+	injected := sb.injectedContext
+	sb.mu.RUnlock()
+
+	// 后续操作无需持锁
 	toolNames := sb.executor.ListTools()
 	toolList := strings.Join(toolNames, ", ")
 
@@ -553,8 +617,8 @@ func (sb *SessionBrain) getMessages() []llm.Message {
 
 请用中文回答，保持简洁专业。当需要执行操作时，主动使用工具。`, toolList)
 
-	if sb.injectedContext != "" {
-		systemContent += "\n\n## 工作区上下文\n" + sb.injectedContext
+	if injected != "" {
+		systemContent += "\n\n## 工作区上下文\n" + injected
 	}
 
 	if sb.memory != nil {
@@ -568,8 +632,15 @@ func (sb *SessionBrain) getMessages() []llm.Message {
 	}
 
 	messages := []llm.Message{{Role: "system", Content: systemContent}}
-	messages = append(messages, sb.history...)
+	messages = append(messages, historyCopy...)
 	return messages
+}
+
+// HistoryLen 返回历史消息数量（并发安全）
+func (sb *SessionBrain) HistoryLen() int {
+	sb.mu.RLock()
+	defer sb.mu.RUnlock()
+	return len(sb.history)
 }
 
 func (sb *SessionBrain) estimateTokens() int {

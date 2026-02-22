@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -11,15 +12,22 @@ const Version = "0.4.0"
 
 // Config 全局配置
 type Config struct {
-	LLM    LLMConfig
-	Tools  ToolsConfig
-	Memory MemoryConfig
-	TUI    TUIConfig
-	Cron   CronConfig
+	LLM      LLMConfig
+	Tools    ToolsConfig
+	Memory   MemoryConfig
+	TUI      TUIConfig
+	Cron     CronConfig
+	Telegram TelegramConfig
 
 	// 全局选项
 	Debug      bool
 	ConfigPath string
+}
+
+// TelegramConfig Telegram Bot 配置
+type TelegramConfig struct {
+	BotToken    string
+	AllowedChat int64 // 0 = 不限制
 }
 
 // LLMConfig LLM 相关配置
@@ -84,47 +92,148 @@ var DefaultDangerousCommands = []string{
 	":(){ :|:& };:",
 }
 
-// Load 加载配置（环境变量 > 默认值）
+// Load 加载配置（优先级: 硬编码默认 → DB → 环境变量）
 func Load() *Config {
+	// 第一步：硬编码默认值
 	cfg := &Config{
 		LLM: LLMConfig{
-			OpenAIAPIBase:    getEnv("OPENAI_API_BASE", "https://api.openai.com/v1"),
-			OpenAIAPIKey:     os.Getenv("OPENAI_API_KEY"),
-			OpenAIModel:      getEnv("OPENAI_MODEL", "gpt-4o"),
-			SmallModel:       os.Getenv("KELE_SMALL_MODEL"),
-			Temperature:      getEnvFloat("KELE_TEMPERATURE", 0.7),
-			MaxTokens:        getEnvInt("KELE_MAX_TOKENS", 4096),
-			AnthropicAPIKey:  os.Getenv("ANTHROPIC_API_KEY"),
-			AnthropicAPIBase: getEnv("ANTHROPIC_API_BASE", "https://api.anthropic.com"),
-			OllamaHost:       getEnv("OLLAMA_HOST", "http://localhost:11434"),
-			MaxToolRounds:    getEnvInt("KELE_MAX_TOOL_ROUNDS", 10),
-			MaxTurns:         getEnvInt("KELE_MAX_TURNS", 20),
-			CompleteTimeout:  getEnvInt("KELE_COMPLETE_TIMEOUT", 8),
+			OpenAIAPIBase:    "https://api.openai.com/v1",
+			OpenAIModel:      "gpt-4o",
+			Temperature:      0.7,
+			MaxTokens:        4096,
+			AnthropicAPIBase: "https://api.anthropic.com",
+			OllamaHost:       "http://localhost:11434",
+			MaxToolRounds:    10,
+			MaxTurns:         20,
+			CompleteTimeout:  8,
 		},
 		Tools: ToolsConfig{
 			DangerousCommands: DefaultDangerousCommands,
-			BashTimeout:       getEnvInt("KELE_BASH_TIMEOUT", 60),
-			MaxOutputSize:     getEnvInt("KELE_MAX_OUTPUT_SIZE", 51200),
-			MaxWriteSize:      getEnvInt("KELE_MAX_WRITE_SIZE", 1048576),
+			BashTimeout:       60,
+			MaxOutputSize:     51200,
+			MaxWriteSize:      1048576,
 		},
 		Memory: MemoryConfig{
-			DBPath:     getEnv("KELE_DB_PATH", ".kele/memory.db"),
-			MemoryFile: getEnv("KELE_MEMORY_FILE", ".kele/MEMORY.md"),
-			SessionDir: getEnv("KELE_SESSION_DIR", ".kele/sessions"),
-			AuditLog:   getEnv("KELE_AUDIT_LOG", ".kele/audit.log"),
+			DBPath:     getEnv("KELE_DB_PATH", filepath.Join(keleDir(), "memory.db")),
+			MemoryFile: getEnv("KELE_MEMORY_FILE", filepath.Join(keleDir(), "MEMORY.md")),
+			SessionDir: getEnv("KELE_SESSION_DIR", filepath.Join(keleDir(), "sessions")),
+			AuditLog:   getEnv("KELE_AUDIT_LOG", filepath.Join(keleDir(), "audit.log")),
 		},
 		TUI: TUIConfig{
-			MaxSessions:   getEnvInt("KELE_MAX_SESSIONS", 9),
-			MaxInputChars: getEnvInt("KELE_MAX_INPUT_CHARS", 5000),
+			MaxSessions:   9,
+			MaxInputChars: 5000,
 		},
 		Cron: CronConfig{
-			JobTimeout:    getEnvInt("KELE_CRON_TIMEOUT", 300),
-			LogRetention:  getEnvInt("KELE_CRON_LOG_RETENTION", 50),
-			MaxConcurrent: getEnvInt("KELE_CRON_MAX_CONCURRENT", 5),
+			JobTimeout:    300,
+			LogRetention:  50,
+			MaxConcurrent: 5,
 		},
 	}
 
+	// 第二步：DB 覆盖（基准配置）
+	ApplyToConfig(cfg)
+
+	// 第三步：环境变量覆盖（最高优先级）
+	applyEnvOverrides(cfg)
+
 	return cfg
+}
+
+// applyEnvOverrides 环境变量覆盖（最高优先级）
+func applyEnvOverrides(cfg *Config) {
+	// LLM
+	if v := os.Getenv("OPENAI_API_BASE"); v != "" {
+		cfg.LLM.OpenAIAPIBase = v
+	}
+	if v := os.Getenv("OPENAI_API_KEY"); v != "" {
+		cfg.LLM.OpenAIAPIKey = v
+	}
+	if v := os.Getenv("OPENAI_MODEL"); v != "" {
+		cfg.LLM.OpenAIModel = v
+	}
+	if v := os.Getenv("KELE_SMALL_MODEL"); v != "" {
+		cfg.LLM.SmallModel = v
+	}
+	if v := os.Getenv("KELE_TEMPERATURE"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.LLM.Temperature = f
+		}
+	}
+	if v := os.Getenv("KELE_MAX_TOKENS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.LLM.MaxTokens = n
+		}
+	}
+	if v := os.Getenv("ANTHROPIC_API_KEY"); v != "" {
+		cfg.LLM.AnthropicAPIKey = v
+	}
+	if v := os.Getenv("ANTHROPIC_API_BASE"); v != "" {
+		cfg.LLM.AnthropicAPIBase = v
+	}
+	if v := os.Getenv("OLLAMA_HOST"); v != "" {
+		cfg.LLM.OllamaHost = v
+	}
+	if v := os.Getenv("KELE_MAX_TOOL_ROUNDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.LLM.MaxToolRounds = n
+		}
+	}
+	if v := os.Getenv("KELE_MAX_TURNS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.LLM.MaxTurns = n
+		}
+	}
+	if v := os.Getenv("KELE_COMPLETE_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.LLM.CompleteTimeout = n
+		}
+	}
+
+	// Tools
+	if v := os.Getenv("KELE_BASH_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Tools.BashTimeout = n
+		}
+	}
+	if v := os.Getenv("KELE_MAX_OUTPUT_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Tools.MaxOutputSize = n
+		}
+	}
+	if v := os.Getenv("KELE_MAX_WRITE_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Tools.MaxWriteSize = n
+		}
+	}
+
+	// TUI
+	if v := os.Getenv("KELE_MAX_SESSIONS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.TUI.MaxSessions = n
+		}
+	}
+	if v := os.Getenv("KELE_MAX_INPUT_CHARS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.TUI.MaxInputChars = n
+		}
+	}
+
+	// Cron
+	if v := os.Getenv("KELE_CRON_TIMEOUT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Cron.JobTimeout = n
+		}
+	}
+	if v := os.Getenv("KELE_CRON_LOG_RETENTION"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Cron.LogRetention = n
+		}
+	}
+	if v := os.Getenv("KELE_CRON_MAX_CONCURRENT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Cron.MaxConcurrent = n
+		}
+	}
 }
 
 // ApplyFlags 应用 CLI 参数覆盖
@@ -161,27 +270,15 @@ func (c *Config) HasAnthropic() bool {
 
 // --- 辅助函数 ---
 
+// keleDir 返回 ~/.kele 绝对路径
+func keleDir() string {
+	homeDir, _ := os.UserHomeDir()
+	return filepath.Join(homeDir, ".kele")
+}
+
 func getEnv(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
-	}
-	return defaultVal
-}
-
-func getEnvInt(key string, defaultVal int) int {
-	if v := os.Getenv(key); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			return n
-		}
-	}
-	return defaultVal
-}
-
-func getEnvFloat(key string, defaultVal float64) float64 {
-	if v := os.Getenv(key); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil {
-			return f
-		}
 	}
 	return defaultVal
 }

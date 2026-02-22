@@ -41,22 +41,32 @@ func (a *App) handleKeyMsg(keyMsg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 	}
 
 	switch {
+	// Ctrl+G: 切换鼠标模式（滚轮滚动 vs 文本选中复制）
+	case keyMsg.Type == tea.KeyCtrlG:
+		a.mouseEnabled = !a.mouseEnabled
+		if a.mouseEnabled {
+			a.updateStatus("鼠标模式: 滚轮滚动")
+			return true, func() tea.Msg { return tea.EnableMouseCellMotion() }
+		}
+		a.updateStatus("鼠标模式: 文本选中 (Shift+滚轮滚动)")
+		return true, func() tea.Msg { return tea.DisableMouse() }
+
 	// Ctrl+E: 切换 Thinking 块展开/折叠
 	case keyMsg.Type == tea.KeyCtrlE:
 		a.thinkingExpanded = !a.thinkingExpanded
 		a.refreshViewport()
 		return true, nil
 
-	// Ctrl+Right / Ctrl+]: 切换到下一个会话（循环）
-	case keyMsg.Type == tea.KeyCtrlRight || keyMsg.Type == tea.KeyCtrlCloseBracket:
+	// Ctrl+N: 切换到下一个会话（循环）
+	case keyMsg.Type == tea.KeyCtrlN:
 		if len(a.sessions) > 1 {
 			next := (a.activeIdx + 1) % len(a.sessions)
 			a.switchSession(next)
 		}
 		return true, nil
 
-	// Ctrl+Left: 切换到上一个会话（循环）
-	case keyMsg.Type == tea.KeyCtrlLeft:
+	// Ctrl+P: 切换到上一个会话（循环）
+	case keyMsg.Type == tea.KeyCtrlP:
 		if len(a.sessions) > 1 {
 			prev := (a.activeIdx - 1 + len(a.sessions)) % len(a.sessions)
 			a.switchSession(prev)
@@ -67,6 +77,7 @@ func (a *App) handleKeyMsg(keyMsg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 	case keyMsg.Type == tea.KeyCtrlC:
 		now := time.Now()
 		if now.Sub(a.lastCtrlC) < doublePressThreshold {
+			a.Close()
 			return true, tea.Quit
 		}
 		a.lastCtrlC = now

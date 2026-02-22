@@ -2,13 +2,21 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
 func TestLoadDefaults(t *testing.T) {
 	// 清理可能干扰的环境变量
+	oldBase := os.Getenv("OPENAI_API_BASE")
 	os.Unsetenv("OPENAI_API_KEY")
 	os.Unsetenv("ANTHROPIC_API_KEY")
+	os.Unsetenv("OPENAI_API_BASE")
+	defer func() {
+		if oldBase != "" {
+			os.Setenv("OPENAI_API_BASE", oldBase)
+		}
+	}()
 
 	cfg := Load()
 
@@ -30,8 +38,10 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.TUI.MaxSessions != 9 {
 		t.Errorf("默认最大会话数应为 9, 实际 %d", cfg.TUI.MaxSessions)
 	}
-	if cfg.Memory.DBPath != ".kele/memory.db" {
-		t.Errorf("默认数据库路径应为 .kele/memory.db, 实际 %s", cfg.Memory.DBPath)
+	homeDir, _ := os.UserHomeDir()
+	expectedDB := filepath.Join(homeDir, ".kele", "memory.db")
+	if cfg.Memory.DBPath != expectedDB {
+		t.Errorf("默认数据库路径应为 %s, 实际 %s", expectedDB, cfg.Memory.DBPath)
 	}
 }
 

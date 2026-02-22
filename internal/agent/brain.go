@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/BlakeLiAFK/kele/internal/config"
 	"github.com/BlakeLiAFK/kele/internal/cron"
@@ -13,6 +14,7 @@ import (
 
 // Brain AI 大脑
 type Brain struct {
+	mu       sync.RWMutex
 	provider *llm.ProviderManager
 	executor *tools.Executor
 	memory   *memory.Store
@@ -228,11 +230,15 @@ func (b *Brain) compressToolOutput(output string) string {
 }
 
 func (b *Brain) addMessage(role, content string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.history = append(b.history, llm.Message{Role: role, Content: content})
 	b.trimHistory()
 }
 
 func (b *Brain) appendRawMessage(msg llm.Message) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	b.history = append(b.history, msg)
 	b.trimHistory()
 }
@@ -248,6 +254,13 @@ func (b *Brain) trimHistory() {
 }
 
 func (b *Brain) getMessages() []llm.Message {
+	// 在锁内拷贝 history
+	b.mu.RLock()
+	historyCopy := make([]llm.Message, len(b.history))
+	copy(historyCopy, b.history)
+	b.mu.RUnlock()
+
+	// 后续操作无需持锁
 	toolNames := b.executor.ListTools()
 	toolList := strings.Join(toolNames, ", ")
 
@@ -275,12 +288,23 @@ func (b *Brain) getMessages() []llm.Message {
 	}
 
 	messages := []llm.Message{systemPrompt}
-	messages = append(messages, b.history...)
+	messages = append(messages, historyCopy...)
 	return messages
 }
 
-func (b *Brain) GetHistory() []llm.Message { return b.history }
-func (b *Brain) ClearHistory()             { b.history = []llm.Message{} }
+func (b *Brain) GetHistory() []llm.Message {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	cp := make([]llm.Message, len(b.history))
+	copy(cp, b.history)
+	return cp
+}
+
+func (b *Brain) ClearHistory() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.history = []llm.Message{}
+}
 
 // StreamEvent 流式事件（Agent 层）
 type StreamEvent struct {

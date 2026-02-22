@@ -246,7 +246,9 @@ func (p *AnthropicProvider) readAnthropicStream(resp *http.Response, eventChan c
 					PartialJSON  string `json:"partial_json"`
 					Thinking     string `json:"thinking"`
 				}
-				json.Unmarshal(event.Delta, &delta)
+				if err := json.Unmarshal(event.Delta, &delta); err != nil {
+					continue
+				}
 
 				switch delta.Type {
 				case "text_delta":
@@ -286,7 +288,9 @@ func (p *AnthropicProvider) readAnthropicStream(resp *http.Response, eventChan c
 				var delta struct {
 					StopReason string `json:"stop_reason"`
 				}
-				json.Unmarshal(event.Delta, &delta)
+				if err := json.Unmarshal(event.Delta, &delta); err != nil {
+					continue
+				}
 				if delta.StopReason == "tool_use" && len(currentToolCalls) > 0 {
 					eventChan <- StreamEvent{Type: "tool_calls", ToolCalls: currentToolCalls}
 					return
@@ -299,7 +303,10 @@ func (p *AnthropicProvider) readAnthropicStream(resp *http.Response, eventChan c
 					Message string `json:"message"`
 				} `json:"error"`
 			}
-			json.Unmarshal(event.Delta, &errData)
+			if err := json.Unmarshal(event.Delta, &errData); err != nil {
+				eventChan <- StreamEvent{Type: "error", Error: fmt.Errorf("Anthropic 流式错误（无法解析详情）")}
+				return
+			}
 			eventChan <- StreamEvent{Type: "error", Error: fmt.Errorf("Anthropic 错误: %s", errData.Error.Message)}
 			return
 		}
