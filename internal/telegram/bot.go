@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -27,21 +28,23 @@ type StreamEvent struct {
 
 // Bot Telegram Bot 实例
 type Bot struct {
-	bot         *tgbot.Bot
-	provider    SessionProvider
-	token       string
-	allowedChat int64
-	lastChatID  int64 // 最近一次对话的 chatID
-	cancel      context.CancelFunc
-	mu          sync.Mutex
+	bot            *tgbot.Bot
+	provider       SessionProvider
+	token          string
+	allowedChat    int64
+	lastChatID     int64 // 最近一次对话的 chatID
+	cancel         context.CancelFunc
+	mu             sync.Mutex
+	pendingAnswers map[int64]chan string // chatID -> answer channel
 }
 
 // New 创建 Telegram Bot 实例
 func New(token string, allowedChat int64, provider SessionProvider) *Bot {
 	return &Bot{
-		token:       token,
-		allowedChat: allowedChat,
-		provider:    provider,
+		token:          token,
+		allowedChat:    allowedChat,
+		provider:       provider,
+		pendingAnswers: make(map[int64]chan string),
 	}
 }
 
@@ -175,6 +178,12 @@ func (b *Bot) keepTyping(ctx context.Context, bot *tgbot.Bot, chatID int64) {
 
 // handleMessage 处理收到的消息
 func (b *Bot) handleMessage(ctx context.Context, bot *tgbot.Bot, update *models.Update) {
+	// 处理 InlineKeyboard 回调
+	if update.CallbackQuery != nil {
+		b.handleCallbackQuery(ctx, bot, update.CallbackQuery)
+		return
+	}
+
 	if update.Message == nil {
 		return
 	}
@@ -183,6 +192,18 @@ func (b *Bot) handleMessage(ctx context.Context, bot *tgbot.Bot, update *models.
 	text := update.Message.Text
 	log.Printf("Telegram message from chat %d: %s", chatID, truncate(text, 50))
 	if text == "" {
+		return
+	}
+
+	// 检查是否有待回答的问题（自由文本模式）
+	b.mu.Lock()
+	ch, hasPending := b.pendingAnswers[chatID]
+	b.mu.Unlock()
+	if hasPending {
+		select {
+		case ch <- text:
+		default:
+		}
 		return
 	}
 
@@ -305,7 +326,16 @@ func (b *Bot) handleChat(ctx context.Context, bot *tgbot.Bot, chatID int64, text
 			thinking.WriteString(ev.Content)
 		case "content":
 			content.WriteString(ev.Content)
-		case "tool_use":
+		case "question":
+			// 发送已有内容
+			if content.Len() > 0 {
+				b.sendLongMessage(ctx, bot, chatID, content.String())
+				content.Reset()
+			}
+			// 解析问题并发送 InlineKeyboard
+			answer := b.handleQuestionEvent(ctx, bot, chatID, sessionID, ev.Content)
+			_ = answer
+		case "tool_use", "tool_call":
 			// 工具调用中，不需要额外处理
 		case "tool_result":
 			// 工具结果，不需要额外处理
@@ -366,6 +396,120 @@ func (b *Bot) sendLongMessage(ctx context.Context, bot *tgbot.Bot, chatID int64,
 			return
 		}
 	}
+}
+
+// handleCallbackQuery 处理 InlineKeyboard 按钮点击
+func (b *Bot) handleCallbackQuery(ctx context.Context, bot *tgbot.Bot, cq *models.CallbackQuery) {
+	data := cq.Data
+	if !strings.HasPrefix(data, "askuser:") {
+		return
+	}
+
+	answer := strings.TrimPrefix(data, "askuser:")
+	chatID := cq.Message.Message.Chat.ID
+
+	// 写入 pendingAnswers
+	b.mu.Lock()
+	ch, ok := b.pendingAnswers[chatID]
+	b.mu.Unlock()
+
+	if ok {
+		select {
+		case ch <- answer:
+		default:
+		}
+	}
+
+	// 回复回调并编辑消息标记已回答
+	bot.AnswerCallbackQuery(ctx, &tgbot.AnswerCallbackQueryParams{
+		CallbackQueryID: cq.ID,
+		Text:            "已选择: " + answer,
+	})
+
+	// 编辑原消息，移除按钮
+	if cq.Message.Message != nil {
+		bot.EditMessageReplyMarkup(ctx, &tgbot.EditMessageReplyMarkupParams{
+			ChatID:    chatID,
+			MessageID: cq.Message.Message.ID,
+		})
+		originalText := cq.Message.Message.Text
+		bot.EditMessageText(ctx, &tgbot.EditMessageTextParams{
+			ChatID:    chatID,
+			MessageID: cq.Message.Message.ID,
+			Text:      originalText + "\n\n[已回答: " + answer + "]",
+		})
+	}
+}
+
+// handleQuestionEvent 处理 question 流事件：发送 InlineKeyboard 或等待自由文本
+func (b *Bot) handleQuestionEvent(ctx context.Context, bot *tgbot.Bot, chatID int64, sessionID, questionJSON string) string {
+	var q struct {
+		Question string   `json:"question"`
+		Options  []string `json:"options"`
+	}
+	if err := json.Unmarshal([]byte(questionJSON), &q); err != nil {
+		return ""
+	}
+
+	// 创建 answer channel
+	answerCh := make(chan string, 1)
+	b.mu.Lock()
+	b.pendingAnswers[chatID] = answerCh
+	b.mu.Unlock()
+
+	defer func() {
+		b.mu.Lock()
+		delete(b.pendingAnswers, chatID)
+		b.mu.Unlock()
+	}()
+
+	if len(q.Options) > 0 {
+		// 发送带 InlineKeyboard 的消息
+		b.sendQuestionMessage(ctx, bot, chatID, q.Question, q.Options)
+	} else {
+		// 无选项：纯文本提问
+		bot.SendMessage(ctx, &tgbot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "[Question] " + q.Question + "\n\n请直接回复文字作为答案",
+		})
+	}
+
+	// 等待回答（5 分钟超时）
+	var answer string
+	select {
+	case answer = <-answerCh:
+	case <-time.After(5 * time.Minute):
+		answer = "[timeout]"
+		bot.SendMessage(ctx, &tgbot.SendMessageParams{
+			ChatID: chatID,
+			Text:   "[超时] 未在 5 分钟内回答，已跳过",
+		})
+	}
+
+	// 通过 /answer 命令回传到 SessionBrain
+	if answer != "" {
+		b.provider.RunCommand(sessionID, "/answer "+answer)
+	}
+
+	return answer
+}
+
+// sendQuestionMessage 发送带 InlineKeyboard 按钮的问题消息
+func (b *Bot) sendQuestionMessage(ctx context.Context, bot *tgbot.Bot, chatID int64, question string, options []string) {
+	var rows [][]models.InlineKeyboardButton
+	for _, opt := range options {
+		rows = append(rows, []models.InlineKeyboardButton{
+			{Text: opt, CallbackData: "askuser:" + opt},
+		})
+	}
+
+	bot.SendMessage(ctx, &tgbot.SendMessageParams{
+		ChatID: chatID,
+		Text:   "[Question] " + question,
+		ReplyMarkup: &models.InlineKeyboardMarkup{
+			InlineKeyboard: rows,
+		},
+	})
 }
 
 // truncate 截断字符串用于日志

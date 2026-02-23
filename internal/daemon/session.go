@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -34,7 +35,8 @@ type SessionBrain struct {
 	cfg             *config.Config
 	injectedContext string // additional context prepended to system prompt
 	workspace       *workspace.Manager
-	currentWork     string // 当前工作空间名
+	currentWork     string      // 当前工作空间名
+	answerChan      chan string // ask_user 工具等待用户回答
 }
 
 // SessionManager manages all active sessions.
@@ -76,12 +78,13 @@ func (sm *SessionManager) Create(name string) *Session {
 		ID:   id,
 		Name: name,
 		brain: &SessionBrain{
-			provider:  sm.provider,
-			executor:  sm.executor,
-			memory:    sm.memory,
-			history:   []llm.Message{},
-			cfg:       sm.cfg,
-			workspace: sm.workspace,
+			provider:   sm.provider,
+			executor:   sm.executor,
+			memory:     sm.memory,
+			history:    []llm.Message{},
+			cfg:        sm.cfg,
+			workspace:  sm.workspace,
+			answerChan: make(chan string, 1),
 		},
 	}
 	sm.sessions[id] = sess
@@ -121,6 +124,14 @@ func (sm *SessionManager) Count() int {
 }
 
 // --- SessionBrain methods (mirror agent.Brain but with shared resources) ---
+
+// Answer 接收用户对 ask_user 的回答
+func (sb *SessionBrain) Answer(text string) {
+	select {
+	case sb.answerChan <- text:
+	default:
+	}
+}
 
 // ChatStream starts a streaming chat with tool auto-loop.
 func (sb *SessionBrain) ChatStream(userInput string) (<-chan ChatEvent, error) {
@@ -183,6 +194,17 @@ func (sb *SessionBrain) ChatStream(userInput string) (<-chan ChatEvent, error) {
 				sb.appendRawMessage(assistantMsg)
 
 				for _, tc := range pendingToolCalls {
+					// 拦截 ask_user 工具
+					if tc.Function.Name == "ask_user" {
+						result := sb.handleAskUser(tc, eventChan)
+						sb.appendRawMessage(llm.Message{
+							Role:       "tool",
+							Content:    result,
+							ToolCallID: tc.ID,
+						})
+						continue
+					}
+
 					eventChan <- ChatEvent{
 						Type:     "tool_call",
 						ToolName: tc.Function.Name,
@@ -228,6 +250,42 @@ func (sb *SessionBrain) ChatStream(userInput string) (<-chan ChatEvent, error) {
 	}()
 
 	return eventChan, nil
+}
+
+// handleAskUser 处理 ask_user 工具调用：发送问题事件，阻塞等待回答
+func (sb *SessionBrain) handleAskUser(tc llm.ToolCall, eventChan chan<- ChatEvent) string {
+	var args struct {
+		Question string   `json:"question"`
+		Options  []string `json:"options"`
+	}
+	json.Unmarshal([]byte(tc.Function.Arguments), &args)
+	if args.Question == "" {
+		return "Error: 缺少 question 参数"
+	}
+
+	questionData, _ := json.Marshal(map[string]interface{}{
+		"question": args.Question,
+		"options":  args.Options,
+	})
+
+	eventChan <- ChatEvent{
+		Type:    "question",
+		Content: string(questionData),
+	}
+
+	// 清空可能残留的旧回答
+	select {
+	case <-sb.answerChan:
+	default:
+	}
+
+	// 阻塞等待用户回答（5 分钟超时）
+	select {
+	case answer := <-sb.answerChan:
+		return fmt.Sprintf("用户回答: %s", answer)
+	case <-time.After(5 * time.Minute):
+		return "用户未在 5 分钟内回答，已超时跳过"
+	}
 }
 
 // ChatEvent is the daemon-side chat event (maps directly to proto.ChatEvent).
@@ -525,10 +583,40 @@ Token 估算: ~%d
 			len(sb.history), tokens, sb.provider.GetModel(), sb.provider.GetActiveProviderName()), false
 
 	case "/cron":
-		return "定时任务通过 daemon 管理\n\n通过对话让 AI 帮你创建，例如：\n  \"每5分钟检查一次磁盘空间\"", false
+		jobs, err := sb.executor.ListCronJobs()
+		if err != nil {
+			return fmt.Sprintf("查询失败: %v", err), false
+		}
+		if len(jobs) == 0 {
+			return "暂无定时任务\n\n通过对话让 AI 帮你创建，例如：\n  \"每5分钟检查一次磁盘空间\"", false
+		}
+		var cs strings.Builder
+		cs.WriteString(fmt.Sprintf("定时任务 (%d 个)\n\n", len(jobs)))
+		for _, j := range jobs {
+			status := "启用"
+			if !j.Enabled {
+				status = "暂停"
+			}
+			nextStr := "-"
+			if j.NextRun != nil {
+				nextStr = j.NextRun.Format("01-02 15:04")
+			}
+			cs.WriteString(fmt.Sprintf("  %s  %s  [%s]  %s  下次: %s\n",
+				j.ID, j.Name, status, j.Schedule, nextStr))
+		}
+		cs.WriteString("\n通过对话管理: 创建/修改/删除/暂停")
+		return cs.String(), false
 
 	case "/works":
 		return sb.handleWorks(args), false
+
+	case "/answer":
+		if len(args) == 0 {
+			return "用法: /answer <回答内容>", false
+		}
+		answer := strings.Join(args, " ")
+		sb.Answer(answer)
+		return fmt.Sprintf("已回答: %s", answer), false
 
 	case "/exit", "/quit":
 		return "再见!", true

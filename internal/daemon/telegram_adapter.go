@@ -36,12 +36,13 @@ func (a *TelegramAdapter) GetOrCreateSession(chatID int64) (string, error) {
 		ID:   sessionID,
 		Name: fmt.Sprintf("Telegram %d", chatID),
 		brain: &SessionBrain{
-			provider:  a.sessions.provider,
-			executor:  a.sessions.executor,
-			memory:    a.sessions.memory,
-			history:   []llm.Message{},
-			cfg:       a.sessions.cfg,
-			workspace: a.sessions.workspace,
+			provider:   a.sessions.provider,
+			executor:   a.sessions.executor,
+			memory:     a.sessions.memory,
+			history:    []llm.Message{},
+			cfg:        a.sessions.cfg,
+			workspace:  a.sessions.workspace,
+			answerChan: make(chan string, 1),
 		},
 	}
 	a.sessions.sessions[sessionID] = sess
@@ -98,6 +99,8 @@ func eventContent(ev ChatEvent) string {
 			return ev.Content
 		}
 		return ev.Error
+	case "question":
+		return ev.Content
 	case "tool_call":
 		return ev.ToolName
 	case "tool_result":

@@ -23,6 +23,45 @@ func (a *App) handleKeyMsg(keyMsg tea.KeyMsg) (consumed bool, cmd tea.Cmd) {
 		return true, nil
 	}
 
+	// Question overlay 按键处理
+	if a.overlayMode == "question" {
+		sess := a.currentSession()
+		if sess.pendingQuestion != nil && len(sess.pendingQuestion.Options) > 0 {
+			switch keyMsg.Type {
+			case tea.KeyUp:
+				if sess.questionIdx > 0 {
+					sess.questionIdx--
+				}
+				return true, nil
+			case tea.KeyDown:
+				if sess.questionIdx < len(sess.pendingQuestion.Options)-1 {
+					sess.questionIdx++
+				}
+				return true, nil
+			case tea.KeyEnter:
+				answer := sess.pendingQuestion.Options[sess.questionIdx]
+				a.answerQuestion(answer)
+				return true, nil
+			case tea.KeyEsc:
+				a.answerQuestion("[skipped]")
+				return true, nil
+			case tea.KeyRunes:
+				if len(keyMsg.Runes) == 1 {
+					r := keyMsg.Runes[0]
+					if r >= '1' && r <= '9' {
+						idx := int(r - '1')
+						if idx < len(sess.pendingQuestion.Options) {
+							answer := sess.pendingQuestion.Options[idx]
+							a.answerQuestion(answer)
+							return true, nil
+						}
+					}
+				}
+			}
+			return true, nil // 消费所有按键
+		}
+	}
+
 	// 设置面板模式下，大部分按键关闭面板
 	if a.overlayMode == "settings" {
 		if keyMsg.Type == tea.KeyEsc {

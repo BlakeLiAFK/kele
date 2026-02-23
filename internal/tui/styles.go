@@ -93,4 +93,23 @@ var (
 	// 补全状态错误样式
 	completionErrorStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("196"))
+
+	// Question overlay 标题样式
+	questionTitleStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("166")).
+				Padding(0, 1).
+				Bold(true)
+
+	// Question 选项样式（未选中）
+	questionOptionStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("252")).
+				PaddingLeft(4)
+
+	// Question 选项样式（选中）
+	questionSelectedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("230")).
+				Background(lipgloss.Color("63")).
+				PaddingLeft(2).
+				Bold(true)
 )

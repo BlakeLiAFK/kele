@@ -86,6 +86,8 @@ func (e *Executor) GetTools() []llm.Tool {
 		tools = append(tools, e.cronTools()...)
 	}
 
+	tools = append(tools, askUserTool())
+
 	return tools
 }
 
@@ -116,6 +118,9 @@ func (e *Executor) Execute(toolCall llm.ToolCall) (string, error) {
 			result, execErr = e.executeCronUpdate(args)
 		case "cron_delete":
 			result, execErr = e.executeCronDelete(args)
+		case "ask_user":
+			// ask_user 由 Brain/SessionBrain 拦截处理，不应到达 Executor
+			return "ask_user 工具应由会话层拦截处理", nil
 		default:
 			execErr = fmt.Errorf("未知工具: %s", name)
 		}
@@ -133,7 +138,16 @@ func (e *Executor) ListTools() []string {
 	if e.scheduler != nil {
 		tools = append(tools, "cron_create", "cron_list", "cron_get", "cron_update", "cron_delete")
 	}
+	tools = append(tools, "ask_user")
 	return tools
+}
+
+// ListCronJobs 返回所有定时任务（供 /cron 命令使用）
+func (e *Executor) ListCronJobs() ([]cron.Job, error) {
+	if e.scheduler == nil {
+		return nil, fmt.Errorf("调度器未初始化")
+	}
+	return e.scheduler.ListJobs()
 }
 
 // --- 内置工具实现 ---
@@ -267,6 +281,34 @@ func (t *WriteTool) Execute(args map[string]interface{}) (string, error) {
 		return "", fmt.Errorf("写入文件失败: %v", err)
 	}
 	return fmt.Sprintf("成功写入文件: %s (%d bytes)", path, len(content)), nil
+}
+
+// --- ask_user 工具 ---
+
+// askUserTool 返回 ask_user 工具的 Schema（由 Brain/SessionBrain 拦截执行）
+func askUserTool() llm.Tool {
+	return llm.Tool{
+		Type: "function",
+		Function: llm.ToolFunction{
+			Name:        "ask_user",
+			Description: "向用户提问并等待回答。需要确认方案、选择选项或获取更多信息时使用。",
+			Parameters: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"question": map[string]interface{}{
+						"type":        "string",
+						"description": "要问用户的问题",
+					},
+					"options": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "选项列表（可选，不提供则用户自由输入）",
+					},
+				},
+				"required": []string{"question"},
+			},
+		},
+	}
 }
 
 // --- 定时任务工具 ---

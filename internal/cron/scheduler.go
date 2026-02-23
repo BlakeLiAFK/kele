@@ -407,22 +407,41 @@ func (s *Scheduler) queryJobs(query string, args ...interface{}) ([]Job, error) 
 
 		j.Enabled = enabled == 1
 		if lastRun.Valid {
-			t, _ := time.Parse("2006-01-02 15:04:05", lastRun.String)
-			j.LastRun = &t
+			if t := parseSQLiteTime(lastRun.String); !t.IsZero() {
+				j.LastRun = &t
+			}
 		}
 		if nextRun.Valid {
-			t, _ := time.Parse("2006-01-02 15:04:05", nextRun.String)
-			j.NextRun = &t
+			if t := parseSQLiteTime(nextRun.String); !t.IsZero() {
+				j.NextRun = &t
+			}
 		}
 		if createdAt.Valid {
-			j.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt.String)
+			j.CreatedAt = parseSQLiteTime(createdAt.String)
 		}
 		if updatedAt.Valid {
-			j.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt.String)
+			j.UpdatedAt = parseSQLiteTime(updatedAt.String)
 		}
 		jobs = append(jobs, j)
 	}
 	return jobs, nil
+}
+
+// parseSQLiteTime 解析 SQLite 存储的多种时间格式
+func parseSQLiteTime(s string) time.Time {
+	formats := []string{
+		"2006-01-02 15:04:05-07:00",
+		"2006-01-02 15:04:05.000000-07:00",
+		"2006-01-02T15:04:05-07:00",
+		"2006-01-02 15:04:05",
+		"2006-01-02T15:04:05Z",
+	}
+	for _, f := range formats {
+		if t, err := time.Parse(f, s); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // generateID 生成任务 ID

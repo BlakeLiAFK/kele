@@ -1,6 +1,6 @@
 # 项目状态
 
-> 最后更新: 2026-02-23 10:00
+> 最后更新: 2026-02-23 15:00
 
 ## 当前版本: v0.4.0
 
@@ -9,12 +9,16 @@
 | 任务 | 开始时间 | 描述 |
 |------|----------|------|
 | arch-review | 2026-02-22 | 架构审查: 并发安全/资源管理/测试覆盖 |
-| web-fetch-tool | 2026-02-23 | 新增 web_fetch 工具，网页内容提取 |
 
 ## 已完成
 
 | 任务 | 完成时间 |
 |------|----------|
+| ask-user-tool | 2026-02-23 |
+| parallel-agents | 2026-02-23 |
+| workspace-and-prompt | 2026-02-23 |
+| web-fetch-tool | 2026-02-23 |
+| system-prompt-builder | 2026-02-23 |
 | send-message-tool | 2026-02-22 |
 | send-message-enhance | 2026-02-22 |
 | config-telegram | 2026-02-22 |

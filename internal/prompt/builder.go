@@ -45,6 +45,10 @@ func Build(p BuildParams) string {
 		"cron_get":     "查看定时任务详情和执行日志",
 		"cron_update":  "更新定时任务（修改名称/表达式/命令/启停）",
 		"cron_delete":  "删除定时任务",
+		"spawn_agent":  "启动子 agent 并行执行任务。参数: task(任务描述)。返回 agent ID",
+		"agent_status": "查看子 agent 状态。参数: id(可选，不传列出全部)",
+		"agent_result": "等待子 agent 完成并获取结果。参数: id(agent ID)。会阻塞直到完成",
+		"ask_user":     "向用户提问，获取确认或选择。参数: question(问题), options(选项列表，可选)",
 	}
 
 	for _, name := range p.ToolNames {
@@ -68,6 +72,7 @@ func Build(p BuildParams) string {
 - 创建脚本并定时执行：write 写脚本 -> bash chmod +x -> cron_create 创建定时任务
 - 获取网页并发送：web_fetch 抓取 -> send_message 发送结果
 - 调用 API 分析数据：http 请求 -> python 处理 -> send_message 通知
+- 并行执行多任务：spawn_agent 启动多个子 agent -> agent_status 查进度 -> agent_result 获取结果汇总
 `)
 
 	// 工作目录信息

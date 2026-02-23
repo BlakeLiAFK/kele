@@ -242,6 +242,38 @@ func renderCompletionStatus(state, errMsg string, spinnerFrame int) string {
 	}
 }
 
+// renderQuestionOverlay 渲染 ask_user 问题选择器
+func renderQuestionOverlay(q *Question, selectedIdx, width, height int) string {
+	title := questionTitleStyle.Width(width).Render("  Kele Question  (Esc to skip)")
+
+	var content strings.Builder
+	content.WriteString("\n")
+	content.WriteString(fmt.Sprintf("  %s\n\n", q.Text))
+
+	if len(q.Options) > 0 {
+		for i, opt := range q.Options {
+			if i == selectedIdx {
+				content.WriteString(questionSelectedStyle.Width(width - 4).
+					Render(fmt.Sprintf("> %d. %s", i+1, opt)))
+			} else {
+				content.WriteString(questionOptionStyle.Width(width - 4).
+					Render(fmt.Sprintf("  %d. %s", i+1, opt)))
+			}
+			content.WriteString("\n")
+		}
+		content.WriteString("\n  Up/Down 移动 | Enter 确认 | 1-9 快选 | Esc 跳过")
+	} else {
+		content.WriteString("  (请在输入框中输入回答，按 Enter 发送)\n")
+	}
+
+	body := overlayContentStyle.
+		Width(width).
+		Height(height - 2).
+		Render(content.String())
+
+	return lipgloss.JoinVertical(lipgloss.Left, title, body)
+}
+
 // renderOverlay 渲染 Ctrl+O 设置叠加层
 func renderOverlay(a *App, width, height int) string {
 	sess := a.currentSession()

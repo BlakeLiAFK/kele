@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -93,6 +94,7 @@ type streamMsg struct {
 	err        error
 	toolName   string // 工具调用名
 	toolResult string // 工具执行结果
+	question   string // ask_user 问题 JSON
 }
 
 // streamInitMsg 流式初始化
@@ -332,6 +334,12 @@ func (a *App) View() string {
 		return "\n  Initializing..."
 	}
 
+	// question overlay
+	sess := a.currentSession()
+	if a.overlayMode == "question" && sess.pendingQuestion != nil {
+		return renderQuestionOverlay(sess.pendingQuestion, sess.questionIdx, a.width, a.height)
+	}
+
 	// Ctrl+O 叠加层
 	if a.overlayMode == "settings" {
 		return renderOverlay(a, a.width, a.height)
@@ -391,6 +399,13 @@ func (a *App) handleEnter() tea.Cmd {
 		return nil
 	}
 
+	// 如果有待回答的问题（无选项模式），优先作为回答处理
+	if sess.pendingQuestion != nil && len(sess.pendingQuestion.Options) == 0 {
+		a.answerQuestion(userInput)
+		a.textarea.Reset()
+		return nil
+	}
+
 	// 清除补全状态
 	a.completionHint = ""
 	a.suggestion = ""
@@ -433,6 +448,22 @@ func (a *App) handleEnter() tea.Cmd {
 	a.refreshViewport()
 
 	return a.startStream(llmInput)
+}
+
+// answerQuestion 回答 ask_user 问题
+func (a *App) answerQuestion(answer string) {
+	sess := a.currentSession()
+	sess.pendingQuestion = nil
+	a.overlayMode = ""
+
+	sess.AddMessage("user", answer)
+	a.refreshViewport()
+
+	if a.isDaemonMode() && sess.daemonSessID != "" {
+		a.client.RunCommand(sess.daemonSessID, "/answer "+answer)
+	} else if sess.brain != nil {
+		sess.brain.Answer(answer)
+	}
 }
 
 // startStream 开始流式响应（绑定到当前会话 ID）
@@ -485,6 +516,8 @@ func (a *App) startStream(userInput string) tea.Cmd {
 						result = ev.Tool.Result
 					}
 					internalChan <- streamEvent{Type: "tool_result", ToolName: name, ToolResult: result}
+				case "question":
+					internalChan <- streamEvent{Type: "question", Content: ev.Content}
 				case "error":
 					internalChan <- streamEvent{Type: "error", Error: ev.Error}
 				case "done":
@@ -520,6 +553,8 @@ func (a *App) continueStreamFor(sessionID int) tea.Cmd {
 			return streamMsg{sessionID: sessionID, toolName: event.ToolName}
 		case "tool_result":
 			return streamMsg{sessionID: sessionID, toolName: event.ToolName, toolResult: event.ToolResult}
+		case "question":
+			return streamMsg{sessionID: sessionID, question: event.Content}
 		case "error":
 			return streamMsg{sessionID: sessionID, err: errors.New(event.Error)}
 		default:
@@ -545,6 +580,26 @@ func (a *App) handleStreamMsg(msg streamMsg) tea.Cmd {
 			a.refreshViewport()
 		}
 		return nil
+	}
+
+	// ask_user 问题事件
+	if msg.question != "" {
+		var q Question
+		if err := json.Unmarshal([]byte(msg.question), &q); err == nil && q.Text != "" {
+			if len(q.Options) > 0 {
+				sess.pendingQuestion = &q
+				sess.questionIdx = 0
+				a.overlayMode = "question"
+			} else {
+				// 无选项：在对话区显示问题，用户通过输入框回答
+				sess.pendingQuestion = &q
+				sess.AddMessage("assistant", fmt.Sprintf("[Question] %s", q.Text))
+			}
+			if isActive {
+				a.refreshViewport()
+			}
+		}
+		return a.continueStreamFor(msg.sessionID)
 	}
 
 	// 推理/思考事件

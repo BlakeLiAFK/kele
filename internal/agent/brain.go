@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/BlakeLiAFK/kele/internal/config"
 	"github.com/BlakeLiAFK/kele/internal/cron"
@@ -15,12 +17,13 @@ import (
 
 // Brain AI 大脑
 type Brain struct {
-	mu       sync.RWMutex
-	provider *llm.ProviderManager
-	executor *tools.Executor
-	memory   *memory.Store
-	history  []llm.Message
-	cfg      *config.Config
+	mu         sync.RWMutex
+	provider   *llm.ProviderManager
+	executor   *tools.Executor
+	memory     *memory.Store
+	history    []llm.Message
+	cfg        *config.Config
+	answerChan chan string // ask_user 工具等待用户回答
 }
 
 // NewBrain 创建新大脑
@@ -31,11 +34,20 @@ func NewBrain(scheduler *cron.Scheduler, cfg *config.Config) *Brain {
 		fmt.Printf("警告: 记忆系统初始化失败: %v\n", err)
 	}
 	return &Brain{
-		provider: llm.NewProviderManager(cfg),
-		executor: tools.NewExecutor(scheduler, cfg),
-		memory:   store,
-		history:  []llm.Message{},
-		cfg:      cfg,
+		provider:   llm.NewProviderManager(cfg),
+		executor:   tools.NewExecutor(scheduler, cfg),
+		memory:     store,
+		history:    []llm.Message{},
+		cfg:        cfg,
+		answerChan: make(chan string, 1),
+	}
+}
+
+// Answer 接收用户对 ask_user 的回答
+func (b *Brain) Answer(text string) {
+	select {
+	case b.answerChan <- text:
+	default:
 	}
 }
 
@@ -154,6 +166,17 @@ func (b *Brain) ChatStream(userInput string) (<-chan StreamEvent, error) {
 				b.appendRawMessage(assistantMsg)
 
 				for _, tc := range pendingToolCalls {
+					// 拦截 ask_user 工具
+					if tc.Function.Name == "ask_user" {
+						result := b.handleAskUser(tc, eventChan)
+						b.appendRawMessage(llm.Message{
+							Role:       "tool",
+							Content:    result,
+							ToolCallID: tc.ID,
+						})
+						continue
+					}
+
 					eventChan <- StreamEvent{
 						Type: "tool_start",
 						Tool: &ToolExecution{Name: tc.Function.Name},
@@ -201,6 +224,44 @@ func (b *Brain) ChatStream(userInput string) (<-chan StreamEvent, error) {
 	}()
 
 	return eventChan, nil
+}
+
+// handleAskUser 处理 ask_user 工具调用：发送问题事件，阻塞等待回答
+func (b *Brain) handleAskUser(tc llm.ToolCall, eventChan chan<- StreamEvent) string {
+	// 解析参数
+	var args struct {
+		Question string   `json:"question"`
+		Options  []string `json:"options"`
+	}
+	json.Unmarshal([]byte(tc.Function.Arguments), &args)
+	if args.Question == "" {
+		return "Error: 缺少 question 参数"
+	}
+
+	// 构造问题 JSON 发送到前端
+	questionData, _ := json.Marshal(map[string]interface{}{
+		"question": args.Question,
+		"options":  args.Options,
+	})
+
+	eventChan <- StreamEvent{
+		Type:    "question",
+		Content: string(questionData),
+	}
+
+	// 清空 answerChan 中可能残留的旧回答
+	select {
+	case <-b.answerChan:
+	default:
+	}
+
+	// 阻塞等待用户回答（5 分钟超时）
+	select {
+	case answer := <-b.answerChan:
+		return fmt.Sprintf("用户回答: %s", answer)
+	case <-time.After(5 * time.Minute):
+		return "用户未在 5 分钟内回答，已超时跳过"
+	}
 }
 
 // compressToolOutput 智能压缩工具输出
@@ -334,10 +395,10 @@ func (b *Brain) ListTools() []string        { return b.executor.ListTools() }
 // GetProviderInfo 获取当前供应商详细信息
 func (b *Brain) GetProviderInfo() map[string]string {
 	return map[string]string{
-		"provider":     b.provider.GetActiveProviderName(),
-		"model":        b.provider.GetModel(),
-		"defaultModel": b.provider.GetDefaultModel(),
-		"smallModel":   b.provider.GetSmallModel(),
+		"provider":      b.provider.GetActiveProviderName(),
+		"model":         b.provider.GetModel(),
+		"defaultModel":  b.provider.GetDefaultModel(),
+		"smallModel":    b.provider.GetSmallModel(),
 		"supportsTools": fmt.Sprintf("%v", b.provider.ActiveSupportsTools()),
 	}
 }

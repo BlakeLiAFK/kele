@@ -15,6 +15,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	"github.com/BlakeLiAFK/kele/internal/agent"
 	"github.com/BlakeLiAFK/kele/internal/config"
 	"github.com/BlakeLiAFK/kele/internal/cron"
 	"github.com/BlakeLiAFK/kele/internal/heartbeat"
@@ -40,6 +41,7 @@ type Daemon struct {
 	boardSched *taskboard.Scheduler
 	planner    *taskboard.Planner
 	telegram   *tgbot.Bot
+	agentPool  *agent.WorkerPool
 	server     *grpc.Server
 	startTime time.Time
 	socketPath string
@@ -153,6 +155,13 @@ func (d *Daemon) initResources() error {
 	// Tool executor
 	d.executor = tools.NewExecutor(d.scheduler, d.cfg)
 
+	// 子 agent 管理池
+	d.agentPool = agent.NewWorkerPool(d.provider, d.executor, d.cfg)
+	d.executor.RegisterTool(tools.NewSpawnAgentTool(d.agentPool))
+	d.executor.RegisterTool(tools.NewAgentStatusTool(d.agentPool))
+	d.executor.RegisterTool(tools.NewAgentResultTool(d.agentPool))
+	log.Println("Agent tools registered")
+
 	// 工作空间管理器
 	ws := workspace.NewManager()
 
@@ -225,6 +234,9 @@ func (d *Daemon) initResources() error {
 
 // cleanup releases all resources.
 func (d *Daemon) cleanup() {
+	if d.agentPool != nil {
+		d.agentPool.Shutdown(10 * time.Second)
+	}
 	if d.telegram != nil {
 		d.telegram.Stop()
 	}

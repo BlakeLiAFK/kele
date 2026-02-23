@@ -8,6 +8,12 @@ import (
 	"github.com/BlakeLiAFK/kele/internal/cron"
 )
 
+// Question 代表一个 ask_user 问题
+type Question struct {
+	Text    string   `json:"question"`
+	Options []string `json:"options"`
+}
+
 // Session 独立的聊天会话
 type Session struct {
 	id           int
@@ -30,6 +36,10 @@ type Session struct {
 
 	// 任务链
 	taskRunning bool
+
+	// ask_user 问询状态
+	pendingQuestion *Question
+	questionIdx     int // 当前选中的选项索引
 }
 
 // NewSession 创建新会话（standalone 模式）

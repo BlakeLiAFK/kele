@@ -199,3 +199,32 @@ func TestBuild_MultiStepExamples(t *testing.T) {
 		t.Error("输出应包含多步骤示例标题")
 	}
 }
+
+func TestBuild_AgentTools(t *testing.T) {
+	result := Build(BuildParams{
+		ToolNames: []string{"spawn_agent", "agent_status", "agent_result"},
+	})
+
+	tests := []struct {
+		tool string
+		desc string
+	}{
+		{"spawn_agent", "启动子 agent"},
+		{"agent_status", "查看子 agent 状态"},
+		{"agent_result", "等待子 agent 完成"},
+	}
+
+	for _, tt := range tests {
+		if !strings.Contains(result, "**"+tt.tool+"**") {
+			t.Errorf("输出应包含工具名 %q", tt.tool)
+		}
+		if !strings.Contains(result, tt.desc) {
+			t.Errorf("%s 应包含描述 %q", tt.tool, tt.desc)
+		}
+	}
+
+	// 多步骤示例中应有并行任务示例
+	if !strings.Contains(result, "并行执行多任务") {
+		t.Error("输出应包含并行任务示例")
+	}
+}
