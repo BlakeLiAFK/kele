@@ -16,6 +16,7 @@ import (
 
 // AnthropicProvider Anthropic Claude 供应商
 type AnthropicProvider struct {
+	name    string // 自定义名称，空则返回 "anthropic"
 	apiBase string
 	apiKey  string
 	client  *http.Client
@@ -32,7 +33,22 @@ func NewAnthropicProvider(cfg *config.Config) *AnthropicProvider {
 	}
 }
 
-func (p *AnthropicProvider) Name() string        { return "anthropic" }
+// NewAnthropicProviderDirect 直接创建指定名称的 Anthropic 供应商
+func NewAnthropicProviderDirect(name, apiBase, apiKey string) *AnthropicProvider {
+	return &AnthropicProvider{
+		name:    name,
+		apiBase: apiBase,
+		apiKey:  apiKey,
+		client:  &http.Client{Timeout: 5 * time.Minute},
+	}
+}
+
+func (p *AnthropicProvider) Name() string {
+	if p.name != "" {
+		return p.name
+	}
+	return "anthropic"
+}
 func (p *AnthropicProvider) SupportsTools() bool  { return true }
 
 // --- Anthropic API 请求/响应类型 ---

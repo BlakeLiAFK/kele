@@ -43,11 +43,12 @@ func NewBrain(scheduler *cron.Scheduler, cfg *config.Config) *Brain {
 	}
 }
 
-// Answer 接收用户对 ask_user 的回答
+// Answer 接收用户对 ask_user 的回答。带超时避免永久阻塞。
 func (b *Brain) Answer(text string) {
 	select {
 	case b.answerChan <- text:
-	default:
+	case <-time.After(5 * time.Second):
+		// 无等待中的 ask_user 调用，丢弃回答
 	}
 }
 
@@ -391,6 +392,12 @@ func (b *Brain) SetSmallModel(model string) { b.provider.SetSmallModel(model) }
 func (b *Brain) GetProviderName() string    { return b.provider.GetActiveProviderName() }
 func (b *Brain) ListProviders() []string    { return b.provider.ListProviders() }
 func (b *Brain) ListTools() []string        { return b.executor.ListTools() }
+
+// 供应商管理代理方法
+func (b *Brain) UseProvider(name, model string) error          { return b.provider.UseProvider(name, model) }
+func (b *Brain) RegisterProvider(name string, p llm.Provider)  { b.provider.RegisterProvider(name, p) }
+func (b *Brain) RemoveProvider(name string) error              { return b.provider.RemoveProvider(name) }
+func (b *Brain) IsExplicitProvider() bool                      { return b.provider.IsExplicitProvider() }
 
 // GetProviderInfo 获取当前供应商详细信息
 func (b *Brain) GetProviderInfo() map[string]string {

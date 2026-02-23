@@ -235,6 +235,138 @@ func TestAnthropicToolUseConversion(t *testing.T) {
 	}
 }
 
+func TestProviderManagerExplicitProvider(t *testing.T) {
+	os.Setenv("OPENAI_API_KEY", "sk-test")
+	defer os.Unsetenv("OPENAI_API_KEY")
+	cfg := config.Load()
+	pm := NewProviderManager(cfg)
+
+	// 注册自定义供应商
+	customProvider := NewOpenAIProviderDirect("z-ai", "https://api.z.ai/v1", "sk-zai")
+	pm.RegisterProvider("z-ai", customProvider)
+
+	// 切换到自定义供应商
+	err := pm.UseProvider("z-ai", "deepseek-chat")
+	if err != nil {
+		t.Fatalf("UseProvider failed: %v", err)
+	}
+	if pm.GetActiveProviderName() != "z-ai" {
+		t.Errorf("活跃供应商应为 z-ai, 实际 %s", pm.GetActiveProviderName())
+	}
+	if pm.GetModel() != "deepseek-chat" {
+		t.Errorf("模型应为 deepseek-chat, 实际 %s", pm.GetModel())
+	}
+	if !pm.IsExplicitProvider() {
+		t.Error("应处于锁定模式")
+	}
+
+	// 锁定模式下 SetModel 不切换供应商
+	pm.SetModel("gpt-4o")
+	if pm.GetActiveProviderName() != "z-ai" {
+		t.Errorf("锁定模式下供应商不应变化, 实际 %s", pm.GetActiveProviderName())
+	}
+	if pm.GetModel() != "gpt-4o" {
+		t.Errorf("模型应为 gpt-4o, 实际 %s", pm.GetModel())
+	}
+
+	// ResetModel 解除锁定
+	pm.ResetModel()
+	if pm.IsExplicitProvider() {
+		t.Error("ResetModel 后不应处于锁定模式")
+	}
+	if pm.GetActiveProviderName() == "z-ai" {
+		t.Error("ResetModel 后活跃供应商不应为 z-ai")
+	}
+}
+
+func TestProviderManagerRegisterRemove(t *testing.T) {
+	cfg := config.Load()
+	pm := NewProviderManager(cfg)
+
+	custom := NewOpenAIProviderDirect("test-provider", "https://test.com/v1", "sk-test")
+	pm.RegisterProvider("test-provider", custom)
+
+	found := false
+	for _, name := range pm.ListProviders() {
+		if name == "test-provider" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("注册后应能列出 test-provider")
+	}
+
+	// 移除
+	err := pm.RemoveProvider("test-provider")
+	if err != nil {
+		t.Fatalf("RemoveProvider failed: %v", err)
+	}
+
+	found = false
+	for _, name := range pm.ListProviders() {
+		if name == "test-provider" {
+			found = true
+			break
+		}
+	}
+	if found {
+		t.Error("移除后不应列出 test-provider")
+	}
+
+	// 移除不存在的
+	err = pm.RemoveProvider("not-exist")
+	if err == nil {
+		t.Error("移除不存在的供应商应返回错误")
+	}
+}
+
+func TestProviderManagerUseNonExistent(t *testing.T) {
+	cfg := config.Load()
+	pm := NewProviderManager(cfg)
+
+	err := pm.UseProvider("non-exist", "")
+	if err == nil {
+		t.Error("切换不存在的供应商应返回错误")
+	}
+}
+
+func TestProviderManagerRemoveActive(t *testing.T) {
+	os.Setenv("OPENAI_API_KEY", "sk-test")
+	defer os.Unsetenv("OPENAI_API_KEY")
+	cfg := config.Load()
+	pm := NewProviderManager(cfg)
+
+	custom := NewOpenAIProviderDirect("active-test", "https://test.com/v1", "sk-test")
+	pm.RegisterProvider("active-test", custom)
+	pm.UseProvider("active-test", "test-model")
+
+	err := pm.RemoveProvider("active-test")
+	if err == nil {
+		t.Error("不能移除活跃供应商")
+	}
+}
+
+func TestOpenAIProviderDirect(t *testing.T) {
+	p := NewOpenAIProviderDirect("custom", "https://api.custom.com/v1", "sk-xxx")
+	if p.Name() != "custom" {
+		t.Errorf("Name() = %s, want custom", p.Name())
+	}
+	if !p.SupportsTools() {
+		t.Error("应支持工具")
+	}
+}
+
+func TestAnthropicProviderDirect(t *testing.T) {
+	p := NewAnthropicProviderDirect("my-claude", "https://api.custom-claude.com", "sk-ant-xxx")
+	if p.Name() != "my-claude" {
+		t.Errorf("Name() = %s, want my-claude", p.Name())
+	}
+	if !p.SupportsTools() {
+		t.Error("应支持工具")
+	}
+}
+
 func TestClassifyAPIError(t *testing.T) {
 	tests := []struct {
 		code     int

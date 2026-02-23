@@ -95,6 +95,7 @@ func (b *Bot) registerCommands(ctx context.Context, bot *tgbot.Bot) {
 		{Command: "config", Description: "查看配置"},
 		{Command: "cron", Description: "定时任务"},
 		{Command: "works", Description: "工作空间管理"},
+		{Command: "provider", Description: "供应商管理"},
 		{Command: "help", Description: "帮助"},
 	}
 	_, err := bot.SetMyCommands(ctx, &tgbot.SetMyCommandsParams{
@@ -291,8 +292,12 @@ func (b *Bot) handleCommand(ctx context.Context, bot *tgbot.Bot, chatID int64, t
 	b.sendLongMessage(ctx, bot, chatID, result)
 }
 
-// handleChat 处理普通对话消息
+// handleChat 处理普通对话消息（10 分钟超时）
 func (b *Bot) handleChat(ctx context.Context, bot *tgbot.Bot, chatID int64, text string) {
+	// 单次对话处理上限 10 分钟
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+
 	// 持续 typing 直到响应完成
 	typingCtx, stopTyping := context.WithCancel(ctx)
 	go b.keepTyping(typingCtx, bot, chatID)
@@ -316,33 +321,41 @@ func (b *Bot) handleChat(ctx context.Context, bot *tgbot.Bot, chatID int64, text
 		return
 	}
 
-	// 收集所有事件
+	// 收集所有事件（支持 ctx 超时取消）
 	var thinking strings.Builder
 	var content strings.Builder
 
-	for ev := range events {
-		switch ev.Type {
-		case "thinking":
-			thinking.WriteString(ev.Content)
-		case "content":
-			content.WriteString(ev.Content)
-		case "question":
-			// 发送已有内容
-			if content.Len() > 0 {
-				b.sendLongMessage(ctx, bot, chatID, content.String())
-				content.Reset()
+loop:
+	for {
+		select {
+		case <-ctx.Done():
+			content.WriteString("\n[timeout]")
+			break loop
+		case ev, ok := <-events:
+			if !ok {
+				break loop
 			}
-			// 解析问题并发送 InlineKeyboard
-			answer := b.handleQuestionEvent(ctx, bot, chatID, sessionID, ev.Content)
-			_ = answer
-		case "tool_use", "tool_call":
-			// 工具调用中，不需要额外处理
-		case "tool_result":
-			// 工具结果，不需要额外处理
-		case "error":
-			content.WriteString(fmt.Sprintf("\n[Error: %s]", ev.Content))
-		case "done":
-			// 完成
+			switch ev.Type {
+			case "thinking":
+				thinking.WriteString(ev.Content)
+			case "content":
+				content.WriteString(ev.Content)
+			case "question":
+				if content.Len() > 0 {
+					b.sendLongMessage(ctx, bot, chatID, content.String())
+					content.Reset()
+				}
+				answer := b.handleQuestionEvent(ctx, bot, chatID, sessionID, ev.Content)
+				_ = answer
+			case "tool_use", "tool_call":
+				// 工具调用中
+			case "tool_result":
+				// 工具结果
+			case "error":
+				content.WriteString(fmt.Sprintf("\n[Error: %s]", ev.Content))
+			case "done":
+				break loop
+			}
 		}
 	}
 

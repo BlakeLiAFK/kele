@@ -16,6 +16,7 @@ import (
 
 // OpenAIProvider OpenAI 兼容供应商
 type OpenAIProvider struct {
+	name    string // 自定义名称，空则返回 "openai"
 	apiBase string
 	apiKey  string
 	client  *http.Client
@@ -32,7 +33,22 @@ func NewOpenAIProvider(cfg *config.Config) *OpenAIProvider {
 	}
 }
 
-func (p *OpenAIProvider) Name() string { return "openai" }
+// NewOpenAIProviderDirect 直接创建指定名称的 OpenAI 兼容供应商
+func NewOpenAIProviderDirect(name, apiBase, apiKey string) *OpenAIProvider {
+	return &OpenAIProvider{
+		name:    name,
+		apiBase: apiBase,
+		apiKey:  apiKey,
+		client:  &http.Client{Timeout: 5 * time.Minute},
+	}
+}
+
+func (p *OpenAIProvider) Name() string {
+	if p.name != "" {
+		return p.name
+	}
+	return "openai"
+}
 
 func (p *OpenAIProvider) SupportsTools() bool { return true }
 

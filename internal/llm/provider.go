@@ -31,11 +31,13 @@ type ProviderManager struct {
 	mu        sync.RWMutex
 
 	// 当前状态
-	activeProvider Provider
-	model          string
-	defaultModel   string
-	smallModel     string
-	smallProvider  Provider
+	activeProvider     Provider
+	activeProviderName string // 显式锁定的供应商名称
+	explicitProvider   bool   // 是否由 /provider use 锁定
+	model              string
+	defaultModel       string
+	smallModel         string
+	smallProvider      Provider
 
 	cfg *config.Config
 }
@@ -84,7 +86,42 @@ func NewProviderManager(cfg *config.Config) *ProviderManager {
 	// 设置 small provider
 	pm.smallProvider = pm.resolveProvider(pm.smallModel)
 
+	// 加载自定义供应商
+	pm.loadCustomProviders()
+
+	// 恢复上次活跃供应商
+	if name, err := config.GetValue("llm.active_provider"); err == nil && name != "" {
+		if p, ok := pm.providers[name]; ok {
+			pm.activeProvider = p
+			pm.activeProviderName = name
+			pm.explicitProvider = true
+			// 恢复对应的默认模型
+			if model, err := config.GetValue("llm.active_model"); err == nil && model != "" {
+				pm.model = model
+			}
+		}
+	}
+
 	return pm
+}
+
+// loadCustomProviders 从 DB 加载自定义供应商并注册
+func (pm *ProviderManager) loadCustomProviders() {
+	profiles, err := config.ListProviderProfiles()
+	if err != nil {
+		return
+	}
+	for _, p := range profiles {
+		var provider Provider
+		switch p.Type {
+		case "anthropic":
+			provider = NewAnthropicProviderDirect(p.Name, p.APIBase, p.APIKey)
+		default:
+			// openai 及其他兼容类型
+			provider = NewOpenAIProviderDirect(p.Name, p.APIBase, p.APIKey)
+		}
+		pm.providers[p.Name] = provider
+	}
 }
 
 // Chat 非流式聊天（带自动重试）
@@ -196,12 +233,14 @@ func (pm *ProviderManager) Complete(messages []Message, maxTokens int) (string, 
 	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
 }
 
-// SetModel 设置模型（自动切换供应商）
+// SetModel 设置模型（锁定供应商时只换模型，否则自动切换供应商）
 func (pm *ProviderManager) SetModel(model string) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	pm.model = model
-	pm.activeProvider = pm.resolveProvider(model)
+	if !pm.explicitProvider {
+		pm.activeProvider = pm.resolveProvider(model)
+	}
 }
 
 // GetModel 获取当前模型
@@ -218,12 +257,24 @@ func (pm *ProviderManager) GetDefaultModel() string {
 	return pm.defaultModel
 }
 
-// ResetModel 重置为默认模型
+// ResetModel 重置为默认模型，同时解除供应商锁定
 func (pm *ProviderManager) ResetModel() {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	pm.model = pm.defaultModel
+	pm.explicitProvider = false
+	pm.activeProviderName = ""
+	// 先回落到内置供应商再 resolve，避免 resolveProvider 回落到自定义供应商
+	for _, name := range []string{"openai", "anthropic", "ollama"} {
+		if p, ok := pm.providers[name]; ok {
+			pm.activeProvider = p
+			break
+		}
+	}
 	pm.activeProvider = pm.resolveProvider(pm.model)
+	// 清除持久化
+	config.DeleteValue("llm.active_provider")
+	config.DeleteValue("llm.active_model")
 }
 
 // GetSmallModel 获取小模型名称
@@ -248,10 +299,72 @@ func (pm *ProviderManager) SetSmallModel(model string) {
 func (pm *ProviderManager) GetActiveProviderName() string {
 	pm.mu.RLock()
 	defer pm.mu.RUnlock()
+	if pm.activeProviderName != "" {
+		return pm.activeProviderName
+	}
 	if pm.activeProvider != nil {
 		return pm.activeProvider.Name()
 	}
 	return "none"
+}
+
+// UseProvider 切换并锁定到指定供应商
+func (pm *ProviderManager) UseProvider(name, model string) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	p, ok := pm.providers[name]
+	if !ok {
+		return fmt.Errorf("供应商不存在: %s", name)
+	}
+
+	pm.activeProvider = p
+	pm.activeProviderName = name
+	pm.explicitProvider = true
+
+	if model != "" {
+		pm.model = model
+	} else {
+		// 尝试从 DB 获取该供应商的默认模型
+		if profile, err := config.GetProvider(name); err == nil && profile.DefaultModel != "" {
+			pm.model = profile.DefaultModel
+		}
+	}
+
+	// 持久化
+	config.SetValue("llm.active_provider", name)
+	config.SetValue("llm.active_model", pm.model)
+	return nil
+}
+
+// RegisterProvider 注册新供应商到管理器
+func (pm *ProviderManager) RegisterProvider(name string, p Provider) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.providers[name] = p
+}
+
+// RemoveProvider 从管理器移除供应商
+func (pm *ProviderManager) RemoveProvider(name string) error {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+
+	if _, ok := pm.providers[name]; !ok {
+		return fmt.Errorf("供应商不存在: %s", name)
+	}
+	// 不可移除正在使用的供应商
+	if pm.activeProviderName == name {
+		return fmt.Errorf("不能移除当前活跃供应商: %s", name)
+	}
+	delete(pm.providers, name)
+	return nil
+}
+
+// IsExplicitProvider 是否处于供应商锁定模式
+func (pm *ProviderManager) IsExplicitProvider() bool {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	return pm.explicitProvider
 }
 
 // ActiveSupportsTools 当前活跃供应商是否支持工具调用
